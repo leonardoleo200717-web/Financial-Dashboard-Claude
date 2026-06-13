@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Financial Dashboard — FIRE</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f6f8; --panel: #ffffff; --ink: #2c3e50; --muted: #7f8c8d;
+    --line: #e3e8ec; --accent: #3498db; --pos: #2ecc71; --neg: #e74c3c;
+    --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.45; }
+  .nav { display: flex; align-items: center; gap: 16px; background: var(--panel); padding: 10px 18px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 50; box-shadow: var(--shadow); flex-wrap: wrap; }
+  .brand { font-weight: 700; font-size: 16px; }
+  .tabs { display: flex; gap: 4px; margin-left: auto; }
+  .tab { border: 0; background: transparent; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .tab:hover { background: var(--bg); }
+  .tab.active { background: var(--accent); color: #fff; }
+  .tab .ic { font-size: 16px; }
+  .content { padding: 18px; max-width: 1280px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px; box-shadow: var(--shadow); }
+  .card-title { margin: 0 0 12px; font-size: 14px; font-weight: 700; }
+  .chart-wrap { position: relative; height: 280px; }
+  h2 { font-size: 20px; margin: 0 0 16px; }
+  h3 { font-size: 14px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); }
+  .btn { border: 1px solid var(--line); background: var(--panel); padding: 8px 14px; border-radius: 8px;
+    cursor: pointer; font-weight: 600; color: var(--ink); }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.neg { color: var(--neg); border-color: var(--neg); }
+  .btn.small { padding: 5px 10px; font-size: 12px; }
+  .btn:focus-visible, .tab:focus-visible, input:focus-visible, .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .link { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: 13px; padding: 2px 4px; }
+  .link.neg { color: var(--neg); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .empty { text-align: center; padding: 60px 20px; }
+  .empty .row { justify-content: center; margin-top: 16px; }
+  .data-table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: var(--radius);
+    overflow: hidden; box-shadow: var(--shadow); margin-top: 12px; }
+  .data-table th, .data-table td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .data-table th:first-child, .data-table td:first-child { text-align: left; }
+  .data-table thead th { background: var(--bg); font-size: 12px; color: var(--muted); }
+  .data-row { cursor: pointer; }
+  .data-row:hover { background: #f9fbfc; }
+  .breakdown td { background: #f9fbfc; }
+  .bk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 14px; text-align: left; }
+  .breakdown-body { padding: 6px 4px; }
+  .flag { color: var(--neg); cursor: help; }
+  .warn { color: #c0392b; background: #fdecea; padding: 6px 10px; border-radius: 6px; margin-top: 8px; display: inline-block; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+  .kpi { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .kpi b { font-variant-numeric: tabular-nums; }
+  .note { margin: 10px 0; padding: 8px 10px; border-radius: 6px; background: var(--bg); }
+  .note.pos { background: #eafaf1; color: #1e8449; }
+  .note.neg { background: #fdecea; color: #c0392b; }
+  .chip { border: 1px solid var(--line); background: var(--panel); padding: 4px 10px; border-radius: 20px; cursor: pointer; margin-right: 6px; }
+  .chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .swr-row { margin-top: 10px; }
+  .mini { width: 100%; border-collapse: collapse; margin: 8px 0; }
+  .mini th, .mini td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--line); }
+  .mini th:first-child, .mini td:first-child { text-align: left; }
+  .form-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+  .form-row label { flex: 0 0 auto; min-width: 140px; color: var(--muted); }
+  .form-row input, .form-row select { flex: 1; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input[type=range] { padding: 0; }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0; cursor: pointer; }
+  .param-grid { columns: 2; column-gap: 24px; }
+  @media (max-width: 640px) { .param-grid { columns: 1; } }
+  .acc-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .acc-name { font-weight: 600; min-width: 140px; }
+  .acc-actions { margin-left: auto; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--bg); }
+  .badge.liq { background: #eafaf1; color: #1e8449; }
+  .badge.lock { background: #fef5e7; color: #b9770e; }
+  .add-acc { display: flex; gap: 8px; margin-top: 12px; }
+  .add-acc input { flex: 1; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+  .storico-head { display: flex; justify-content: space-between; align-items: center; }
+  .big { font-size: 32px; font-weight: 700; }
+  /* modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center;
+    justify-content: center; z-index: 100; padding: 16px; }
+  .modal { background: var(--panel); border-radius: var(--radius); width: 640px; max-width: 100%; max-height: 92vh;
+    display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+  .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .modal-head h2 { margin: 0; }
+  .modal-body { padding: 16px 18px; overflow-y: auto; }
+  .modal-body section { margin-bottom: 18px; }
+  .modal-body section h3 { margin: 0 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--bg); }
+  .modal-foot { padding: 10px 18px; background: var(--bg); display: flex; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--line); }
+  .modal-actions { padding: 12px 18px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); }
+  .close { background: none; border: 0; font-size: 24px; cursor: pointer; color: var(--muted); line-height: 1; }
+  .multi-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  .multi-row select, .multi-row input { padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; }
+  details summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
+  @media (max-width: 720px) {
+    .nav { position: fixed; bottom: 0; top: auto; left: 0; right: 0; border-top: 1px solid var(--line); border-bottom: 0; }
+    .brand { display: none; }
+    .tabs { margin: 0 auto; width: 100%; justify-content: space-around; }
+    .tab .lb { font-size: 10px; }
+    .tab { flex-direction: column; gap: 2px; padding: 6px; }
+    body { padding-bottom: 64px; }
+    .content { padding: 12px; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/*<<ENGINE>>*/
+</script>
+<script>
+/*<<APP>>*/
+</script>
+</body>
+</html>
