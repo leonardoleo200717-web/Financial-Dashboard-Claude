@@ -341,6 +341,38 @@ console.log('\n=== Scenario 7: reconciliation matches registered contributions =
 }
 
 /* =====================================================================
+   SCENARIO 7b — FIRE capital = investments only (brokers by default)
+   ===================================================================== */
+console.log('\n=== Scenario 7b: FIRE capital excludes cash/savings ===');
+{
+  const d = newData();
+  const bank = addAccount(d, 'Bank', 'current');
+  const sav = addAccount(d, 'Savings', 'savings');
+  const broker = addAccount(d, 'Broker', 'broker');
+  const pension = addAccount(d, 'Pension', 'pension');
+  snap(d, bank, '2026-01', 5000, 5000);
+  snap(d, sav, '2026-01', 30000, null);
+  snap(d, broker, '2026-01', 100000, null);
+  snap(d, pension, '2026-01', 40000, null);
+  test('liquid net worth includes cash + savings + broker', () => {
+    approx(E.liquidNetWorth(d, '2026-01'), 135000);
+  });
+  test('fireCapital is broker-only by default (excludes cash, savings, pension)', () => {
+    approx(E.fireCapital(d, '2026-01'), 100000);
+  });
+  test('includeInFire=true on savings adds it to FIRE capital', () => {
+    sav.includeInFire = true;
+    approx(E.fireCapital(d, '2026-01'), 130000);
+    sav.includeInFire = false;
+    approx(E.fireCapital(d, '2026-01'), 100000);
+  });
+  test('a pension can never be counted in FIRE capital', () => {
+    pension.includeInFire = true; // even if forced
+    approx(E.fireCapital(d, '2026-01'), 100000);
+  });
+}
+
+/* =====================================================================
    SCENARIO 8 — FIRE math sanity
    ===================================================================== */
 console.log('\n=== Scenario 8: FIRE math ===');
