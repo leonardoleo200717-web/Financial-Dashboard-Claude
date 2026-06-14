@@ -1234,5 +1234,5 @@
   window.addEventListener('DOMContentLoaded', render);
   if (document.readyState !== 'loading') render();
   // expose for debugging/tests in browser
-  window.FD = { get data() { return data; }, save, render, seedDemo, go };
+  window.FD = { get data() { return data; }, load, save, render, seedDemo, go };
 })();

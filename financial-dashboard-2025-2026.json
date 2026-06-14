@@ -1,0 +1,900 @@
+{
+  "schemaVersion": 2,
+  "accounts": [
+    {
+      "id": "acc-1",
+      "name": "ABN AMRO",
+      "type": "current",
+      "liquidity": "liquid",
+      "color": "#3498db",
+      "createdAt": "2025-01",
+      "archivedAt": null
+    },
+    {
+      "id": "acc-2",
+      "name": "ABN Savings",
+      "type": "savings",
+      "liquidity": "liquid",
+      "color": "#1abc9c",
+      "createdAt": "2026-01",
+      "archivedAt": null
+    },
+    {
+      "id": "acc-3",
+      "name": "EquatePlus (ASML)",
+      "type": "broker",
+      "liquidity": "liquid",
+      "color": "#9b59b6",
+      "createdAt": "2025-01",
+      "archivedAt": "2026-01"
+    },
+    {
+      "id": "acc-4",
+      "name": "Scalable Capital",
+      "type": "broker",
+      "liquidity": "liquid",
+      "color": "#2ecc71",
+      "createdAt": "2025-01",
+      "archivedAt": null
+    },
+    {
+      "id": "acc-5",
+      "name": "Scalable Savings",
+      "type": "savings",
+      "liquidity": "liquid",
+      "color": "#16a085",
+      "createdAt": "2026-03",
+      "archivedAt": null
+    },
+    {
+      "id": "acc-6",
+      "name": "Trade Republic",
+      "type": "broker",
+      "liquidity": "liquid",
+      "color": "#e67e22",
+      "createdAt": "2025-01",
+      "archivedAt": "2026-03"
+    },
+    {
+      "id": "acc-7",
+      "name": "Generali (pensione)",
+      "type": "pension",
+      "liquidity": "locked",
+      "color": "#f1c40f",
+      "createdAt": "2025-01",
+      "archivedAt": null
+    }
+  ],
+  "snapshots": {
+    "acc-1|2025-01": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-01",
+      "balancePayday": 68593,
+      "balancePaydayMinus1": 64414
+    },
+    "acc-3|2025-01": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-01",
+      "balancePayday": 6052,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-01": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-01",
+      "balancePayday": 27411,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-01": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-01",
+      "balancePayday": 23028,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-02": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-02",
+      "balancePayday": 73902,
+      "balancePaydayMinus1": 60658
+    },
+    "acc-3|2025-02": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-02",
+      "balancePayday": 7651,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-02": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-02",
+      "balancePayday": 31572,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-02": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-02",
+      "balancePayday": 25038,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-03": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-03",
+      "balancePayday": 73671,
+      "balancePaydayMinus1": 69331
+    },
+    "acc-3|2025-03": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-03",
+      "balancePayday": 6716,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-03": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-03",
+      "balancePayday": 40557,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-03": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-03",
+      "balancePayday": 25038,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-04": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-04",
+      "balancePayday": 65300,
+      "balancePaydayMinus1": 61036
+    },
+    "acc-3|2025-04": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-04",
+      "balancePayday": 8101,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-04": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-04",
+      "balancePayday": 39747,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-04": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-04",
+      "balancePayday": 25093,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-05": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-05",
+      "balancePayday": 66698,
+      "balancePaydayMinus1": 62390
+    },
+    "acc-3|2025-05": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-05",
+      "balancePayday": 9555,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-05": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-05",
+      "balancePayday": 42500,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-05": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-05",
+      "balancePayday": 25192,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-06": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-06",
+      "balancePayday": 69785,
+      "balancePaydayMinus1": 61444
+    },
+    "acc-3|2025-06": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-06",
+      "balancePayday": 9460,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-06": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-06",
+      "balancePayday": 45389,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-06": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-06",
+      "balancePayday": 25192,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-07": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-07",
+      "balancePayday": 63841,
+      "balancePaydayMinus1": 59481
+    },
+    "acc-3|2025-07": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-07",
+      "balancePayday": 10000,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-07": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-07",
+      "balancePayday": 77200,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-07": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-07",
+      "balancePayday": 3000,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-08": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-08",
+      "balancePayday": 40440,
+      "balancePaydayMinus1": 36102
+    },
+    "acc-3|2025-08": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-08",
+      "balancePayday": 10798,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-08": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-08",
+      "balancePayday": 104233,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-08": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-08",
+      "balancePayday": 3000,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-09": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-09",
+      "balancePayday": 42703,
+      "balancePaydayMinus1": 38474
+    },
+    "acc-3|2025-09": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-09",
+      "balancePayday": 12749,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-09": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-09",
+      "balancePayday": 105390,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-09": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-09",
+      "balancePayday": 3000,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-10": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-10",
+      "balancePayday": 39361,
+      "balancePaydayMinus1": 34994
+    },
+    "acc-3|2025-10": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-10",
+      "balancePayday": 11526,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-10": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-10",
+      "balancePayday": 119150,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-10": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-10",
+      "balancePayday": 2000,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-11": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-11",
+      "balancePayday": 40637,
+      "balancePaydayMinus1": 36037
+    },
+    "acc-3|2025-11": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-11",
+      "balancePayday": 9366,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-11": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-11",
+      "balancePayday": 120971,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-11": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-11",
+      "balancePayday": 850,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2025-12": {
+      "accountId": "acc-1",
+      "yearMonth": "2025-12",
+      "balancePayday": 44598,
+      "balancePaydayMinus1": 35501
+    },
+    "acc-3|2025-12": {
+      "accountId": "acc-3",
+      "yearMonth": "2025-12",
+      "balancePayday": 10800,
+      "balancePaydayMinus1": null
+    },
+    "acc-4|2025-12": {
+      "accountId": "acc-4",
+      "yearMonth": "2025-12",
+      "balancePayday": 125561,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2025-12": {
+      "accountId": "acc-6",
+      "yearMonth": "2025-12",
+      "balancePayday": 850,
+      "balancePaydayMinus1": null
+    },
+    "acc-7|2025-12": {
+      "accountId": "acc-7",
+      "yearMonth": "2025-12",
+      "balancePayday": 8000,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2026-01": {
+      "accountId": "acc-1",
+      "yearMonth": "2026-01",
+      "balancePayday": 9455,
+      "balancePaydayMinus1": 5000
+    },
+    "acc-4|2026-01": {
+      "accountId": "acc-4",
+      "yearMonth": "2026-01",
+      "balancePayday": 135200,
+      "balancePaydayMinus1": null
+    },
+    "acc-2|2026-01": {
+      "accountId": "acc-2",
+      "yearMonth": "2026-01",
+      "balancePayday": 30847,
+      "balancePaydayMinus1": null
+    },
+    "acc-3|2026-01": {
+      "accountId": "acc-3",
+      "yearMonth": "2026-01",
+      "balancePayday": 14152,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2026-01": {
+      "accountId": "acc-6",
+      "yearMonth": "2026-01",
+      "balancePayday": 1600,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2026-02": {
+      "accountId": "acc-1",
+      "yearMonth": "2026-02",
+      "balancePayday": 17712,
+      "balancePaydayMinus1": 2556
+    },
+    "acc-4|2026-02": {
+      "accountId": "acc-4",
+      "yearMonth": "2026-02",
+      "balancePayday": 153423,
+      "balancePaydayMinus1": null
+    },
+    "acc-2|2026-02": {
+      "accountId": "acc-2",
+      "yearMonth": "2026-02",
+      "balancePayday": 34202,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2026-02": {
+      "accountId": "acc-6",
+      "yearMonth": "2026-02",
+      "balancePayday": 1600,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2026-03": {
+      "accountId": "acc-1",
+      "yearMonth": "2026-03",
+      "balancePayday": 7722,
+      "balancePaydayMinus1": 2619
+    },
+    "acc-4|2026-03": {
+      "accountId": "acc-4",
+      "yearMonth": "2026-03",
+      "balancePayday": 160000,
+      "balancePaydayMinus1": null
+    },
+    "acc-2|2026-03": {
+      "accountId": "acc-2",
+      "yearMonth": "2026-03",
+      "balancePayday": 13202,
+      "balancePaydayMinus1": null
+    },
+    "acc-5|2026-03": {
+      "accountId": "acc-5",
+      "yearMonth": "2026-03",
+      "balancePayday": 20000,
+      "balancePaydayMinus1": null
+    },
+    "acc-6|2026-03": {
+      "accountId": "acc-6",
+      "yearMonth": "2026-03",
+      "balancePayday": 1600,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2026-04": {
+      "accountId": "acc-1",
+      "yearMonth": "2026-04",
+      "balancePayday": 8300,
+      "balancePaydayMinus1": 3171
+    },
+    "acc-4|2026-04": {
+      "accountId": "acc-4",
+      "yearMonth": "2026-04",
+      "balancePayday": 177631,
+      "balancePaydayMinus1": null
+    },
+    "acc-2|2026-04": {
+      "accountId": "acc-2",
+      "yearMonth": "2026-04",
+      "balancePayday": 9000,
+      "balancePaydayMinus1": null
+    },
+    "acc-5|2026-04": {
+      "accountId": "acc-5",
+      "yearMonth": "2026-04",
+      "balancePayday": 20022,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2026-05": {
+      "accountId": "acc-1",
+      "yearMonth": "2026-05",
+      "balancePayday": 8196,
+      "balancePaydayMinus1": 3100
+    },
+    "acc-4|2026-05": {
+      "accountId": "acc-4",
+      "yearMonth": "2026-05",
+      "balancePayday": 186426,
+      "balancePaydayMinus1": null
+    },
+    "acc-2|2026-05": {
+      "accountId": "acc-2",
+      "yearMonth": "2026-05",
+      "balancePayday": 9000,
+      "balancePaydayMinus1": null
+    },
+    "acc-5|2026-05": {
+      "accountId": "acc-5",
+      "yearMonth": "2026-05",
+      "balancePayday": 20063,
+      "balancePaydayMinus1": null
+    },
+    "acc-7|2026-05": {
+      "accountId": "acc-7",
+      "yearMonth": "2026-05",
+      "balancePayday": 10000,
+      "balancePaydayMinus1": null
+    }
+  },
+  "entries": {
+    "2025-01": {
+      "yearMonth": "2025-01",
+      "salaryNet": 4179,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-8",
+          "accountId": "acc-3",
+          "amount": 600,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-9",
+          "accountId": "acc-4",
+          "amount": 700,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-02": {
+      "yearMonth": "2025-02",
+      "salaryNet": 13244,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-10",
+          "accountId": "acc-3",
+          "amount": 600,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-11",
+          "accountId": "acc-4",
+          "amount": 11200,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-03": {
+      "yearMonth": "2025-03",
+      "salaryNet": 4340,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-12",
+          "accountId": "acc-3",
+          "amount": 600,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-13",
+          "accountId": "acc-4",
+          "amount": 702,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-04": {
+      "yearMonth": "2025-04",
+      "salaryNet": 4264,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-14",
+          "accountId": "acc-3",
+          "amount": 600,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-15",
+          "accountId": "acc-4",
+          "amount": 704,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-05": {
+      "yearMonth": "2025-05",
+      "salaryNet": 4308,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-16",
+          "accountId": "acc-3",
+          "amount": 600,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-17",
+          "accountId": "acc-4",
+          "amount": 704,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-06": {
+      "yearMonth": "2025-06",
+      "salaryNet": 8341,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-18",
+          "accountId": "acc-3",
+          "amount": 600,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-19",
+          "accountId": "acc-4",
+          "amount": 705,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-07": {
+      "yearMonth": "2025-07",
+      "salaryNet": 4360,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-20",
+          "accountId": "acc-3",
+          "amount": 600,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-21",
+          "accountId": "acc-4",
+          "amount": 30000,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-08": {
+      "yearMonth": "2025-08",
+      "salaryNet": 4338,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-22",
+          "accountId": "acc-3",
+          "amount": 700,
+          "kind": "recurring",
+          "source": "external"
+        },
+        {
+          "id": "c-23",
+          "accountId": "acc-4",
+          "amount": 20000,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-09": {
+      "yearMonth": "2025-09",
+      "salaryNet": 4229,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-10": {
+      "yearMonth": "2025-10",
+      "salaryNet": 4367,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-11": {
+      "yearMonth": "2025-11",
+      "salaryNet": 4600,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2025-12": {
+      "yearMonth": "2025-12",
+      "salaryNet": 9097,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2026-01": {
+      "yearMonth": "2026-01",
+      "salaryNet": 4455,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-24",
+          "accountId": "acc-4",
+          "amount": 713,
+          "kind": "recurring",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2026-02": {
+      "yearMonth": "2026-02",
+      "salaryNet": 15156,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-25",
+          "accountId": "acc-4",
+          "amount": 1215,
+          "kind": "recurring",
+          "source": "current"
+        },
+        {
+          "id": "c-26",
+          "accountId": "acc-4",
+          "amount": 13400,
+          "kind": "one_off",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2026-03": {
+      "yearMonth": "2026-03",
+      "salaryNet": 5103,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-27",
+          "accountId": "acc-4",
+          "amount": 1383,
+          "kind": "recurring",
+          "source": "current"
+        },
+        {
+          "id": "c-28",
+          "accountId": "acc-4",
+          "amount": 13000,
+          "kind": "one_off",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2026-04": {
+      "yearMonth": "2026-04",
+      "salaryNet": 5129,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-29",
+          "accountId": "acc-4",
+          "amount": 884,
+          "kind": "recurring",
+          "source": "current"
+        },
+        {
+          "id": "c-30",
+          "accountId": "acc-4",
+          "amount": 8000,
+          "kind": "one_off",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2026-05": {
+      "yearMonth": "2026-05",
+      "salaryNet": 5096,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-31",
+          "accountId": "acc-4",
+          "amount": 1186,
+          "kind": "recurring",
+          "source": "current"
+        },
+        {
+          "id": "c-32",
+          "accountId": "acc-4",
+          "amount": 1476,
+          "kind": "one_off",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    }
+  },
+  "plans": [],
+  "settings": {
+    "defaultPaydayDayOfMonth": 25,
+    "birthDate": "1990-01-01",
+    "fire": {
+      "monthlyExpenseFire": 2500,
+      "swr": 0.035,
+      "realReturnBase": 0.05,
+      "realReturnOptimistic": 0.07,
+      "inflation": 0.025,
+      "coastAge": 45,
+      "fireAge": 55,
+      "pensionStartAge": 67,
+      "expectedPensionMonthly": 1200,
+      "box3DragAnnual": 0.0212,
+      "box3StartDate": "2027-05",
+      "marginalRateBox1": 0.37,
+      "monteCarlo": {
+        "meanReturn": 0.06,
+        "stdDev": 0.15,
+        "runs": 1000
+      }
+    },
+    "milestones": [
+      {
+        "id": "ms-33",
+        "date": "2027-05",
+        "label": "Scadenza 30% ruling + Box 3",
+        "note": null
+      },
+      {
+        "id": "ms-34",
+        "date": "2030-12",
+        "label": "iBonds Dec 2030 maturity — riallocare",
+        "note": null
+      }
+    ]
+  }
+}
