@@ -78,6 +78,28 @@ function run() {
     if (!rows.length) throw new Error('no data rows');
   });
 
+  t('FIRE tab shows headline progress + personal-return card', () => {
+    window.FD.go('fire');
+    const txt = document.body.textContent;
+    if (!/A che punto sei/.test(txt)) throw new Error('headline missing');
+    if (!document.querySelector('.progress-fill')) throw new Error('progress bar missing');
+    if (!/Rendimento personale/.test(txt)) throw new Error('personal return card missing');
+  });
+
+  t('new-month entry form prefills balances and offers ghost contributions', () => {
+    // open a fresh future month (2026-12) -> should carry forward balances
+    const ov = document.querySelector('.modal-overlay'); if (ov) ov.remove();
+    // 2026-04 is new; its predecessor 2026-03 has balances + a recurring contribution
+    window.FD.openEntry('2026-04');
+    const modal = document.querySelector('.modal');
+    if (!modal) throw new Error('entry modal did not open');
+    const paydayInputs = modal.querySelectorAll('[data-snap-payday]');
+    const anyPrefilled = Array.from(paydayInputs).some(i => i.value !== '' && i.value !== '0');
+    if (!anyPrefilled) throw new Error('balances were not prefilled from previous month');
+    if (!/Ricorrenti del mese scorso/.test(modal.textContent)) throw new Error('ghost contributions missing');
+    document.querySelector('.modal-overlay').remove();
+  });
+
   t('entry form opens and shows transfer rows for 2026-03', () => {
     window.FD.go('storico');
     // open editor for the chain month via the engine-backed form

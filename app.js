@@ -531,6 +531,17 @@
   /* ============================ TAB 3 — FIRE ======================== */
   function renderFire(main) {
     const f = data.settings.fire;
+
+    // Birth-date nudge: every age-based number is wrong until this is set.
+    if (isPlaceholderBirthDate(data.settings.birthDate)) {
+      const warn = el('div', 'note neg');
+      warn.innerHTML = `⚠ La <b>data di nascita</b> è un segnaposto (${data.settings.birthDate}). Tutti i calcoli per età (Coast, Monte Carlo, due fasi) sono errati finché non la imposti in <b>Impostazioni → Parametri</b>.`;
+      main.appendChild(warn);
+    }
+
+    // Headline: time-to-FIRE + progress, using actual savings pace.
+    main.appendChild(fireHeadline());
+
     const grid = el('div', 'grid');
     main.appendChild(grid);
 
@@ -578,6 +589,70 @@
 
     // 3.6 What-if
     grid.appendChild(whatIfCard());
+
+    // 3.7 Rendimento personale (Simple Dietz)
+    grid.appendChild(personalReturnCard());
+  }
+
+  function isPlaceholderBirthDate(bd) {
+    return !bd || bd === '1990-01-01' || bd === '1990-01-15';
+  }
+
+  // Default monthly contribution = the user's actual rolling-12m invested pace.
+  function actualMonthlyContribution() {
+    const v = E.trailingInvested(data, 12);
+    return (v != null && v > 0) ? Math.round(v) : 2000;
+  }
+
+  // Big headline card: when you reach the FIRE number at your real pace + a
+  // progress bar, plus Coast status.
+  function fireHeadline() {
+    const f = data.settings.fire;
+    const today = currentMonth();
+    const cap = E.fireCapital(data, lastMonthWith(today)) || 0;
+    const fireN = E.fireNumberSimple(f);
+    const monthly = actualMonthlyContribution();
+    const age = E.ageAt(data.settings.birthDate, today);
+    const proj = E.project({ start: cap, monthlyContribution: monthly, annualReturn: f.realReturnBase, fireNumber: fireN, startYM: today, maxYears: 70 });
+    const pct = Math.max(0, Math.min(1, cap / fireN));
+    let arrival = '—', arrivalAge = '';
+    if (proj.reachedYM) {
+      arrival = E.ymParts(proj.reachedYM).y;
+      if (age != null) arrivalAge = ` · età ${(age + E.monthsBetween(today, proj.reachedYM) / 12).toFixed(0)}`;
+    } else arrival = 'oltre 70 anni';
+    const coast = E.coastFire(f, cap, age, f.realReturnBase);
+    const coasting = cap >= coast.requiredToday;
+    const body = el('div');
+    body.innerHTML = `
+      <div class="headline-row">
+        <div><div class="muted small">Capitale FIRE</div><div class="big">${fmt(cap)}</div></div>
+        <div><div class="muted small">FIRE number</div><div class="big">${fmt(fireN)}</div></div>
+        <div><div class="muted small">Arrivo stimato</div><div class="big">${arrival}<span class="muted" style="font-size:14px">${arrivalAge}</span></div></div>
+      </div>
+      <div class="progress"><div class="progress-fill" style="width:${(pct * 100).toFixed(1)}%"></div><span class="progress-label">${(pct * 100).toFixed(1)}% verso il FIRE number</span></div>
+      <div class="note ${coasting ? 'pos' : ''}">${coasting
+        ? '✓ Sei già in <b>Coast FIRE</b>: anche senza nuovi contributi arrivi al FIRE number entro i ' + f.fireAge + ' anni.'
+        : 'Non ancora in Coast FIRE — gap di ' + fmt(coast.gapToday) + ' rispetto al capitale che basterebbe smettendo oggi.'}</div>
+      <div class="muted small">Proiezione al ritmo reale di risparmio: ${fmt(monthly)}/mese (media 12m) · rendimento ${(f.realReturnBase * 100).toFixed(1)}%.</div>`;
+    return card('🔥 A che punto sei', body);
+  }
+
+  function personalReturnCard() {
+    const body = el('div');
+    const years = Array.from(new Set(E.monthSeries(data).map(m => m.slice(0, 4)))).sort();
+    const f = data.settings.fire;
+    let rows = '';
+    years.forEach(y => {
+      const pr = E.personalReturn(data, parseInt(y, 10));
+      if (!pr) return;
+      const cls = pr.ret >= f.realReturnBase ? 'pos' : 'neg';
+      rows += `<tr><td>${y}</td><td class="${cls}">${fmtP(pr.ret)}</td><td>${fmt(pr.marketGrowth)}</td><td>${fmt(pr.netFlow)}</td></tr>`;
+    });
+    body.innerHTML = rows
+      ? `<table class="mini"><tr><th>Anno</th><th>Rendimento</th><th>Mercato</th><th>Flussi netti</th></tr>${rows}</table>
+         <div class="muted small">Simple Dietz sul capitale FIRE. Confronto con l'assunzione di ${(f.realReturnBase * 100).toFixed(1)}% (verde = sopra). Stima approssimata.</div>`
+      : '<p class="muted small">Servono almeno due mesi di dati per stimare il rendimento.</p>';
+    return card('3.7 Rendimento personale', body);
   }
 
   function lastMonthWith(ym) {
@@ -651,7 +726,7 @@
     const today = currentMonth();
     if (!projState) projState = {
       start: E.fireCapital(data, lastMonthWith(today)) || 0,
-      monthly: 2000, applyBox3: true,
+      monthly: actualMonthlyContribution(), applyBox3: true,
     };
     const body = el('div');
     body.innerHTML = `
@@ -711,7 +786,7 @@
       const age = E.ageAt(data.settings.birthDate, today);
       const res = E.monteCarlo({
         start: E.fireCapital(data, lastMonthWith(today)) || 0,
-        monthlyContribution: projState ? projState.monthly : 2000,
+        monthlyContribution: projState ? projState.monthly : actualMonthlyContribution(),
         currentAge: age, fireAge: f.fireAge, pensionStartAge: f.pensionStartAge,
         monthlyExpenseFire: f.monthlyExpenseFire, expectedPensionMonthly: f.expectedPensionMonthly,
         inflation: f.inflation, meanReturn: f.monteCarlo.meanReturn, stdDev: f.monteCarlo.stdDev,
@@ -743,11 +818,11 @@
     const f = data.settings.fire;
     const today = currentMonth();
     const start = E.fireCapital(data, lastMonthWith(today)) || 0;
-    const st = { contrib: 2000, ret: f.realReturnBase, exp: f.monthlyExpenseFire };
+    const st = { contrib: actualMonthlyContribution(), ret: f.realReturnBase, exp: f.monthlyExpenseFire };
     const body = el('div');
     body.innerHTML = `
       <div class="form-row"><label>Contributo mensile: <b id="wi-c-l">${fmt(st.contrib)}</b></label>
-        <input type="range" id="wi-c" min="0" max="4000" step="50" value="${st.contrib}"></div>
+        <input type="range" id="wi-c" min="0" max="8000" step="50" value="${st.contrib}"></div>
       <div class="form-row"><label>Rendimento reale: <b id="wi-r-l">${(st.ret * 100).toFixed(1)}%</b></label>
         <input type="range" id="wi-r" min="3" max="8" step="0.1" value="${st.ret * 100}"></div>
       <div class="form-row"><label>Spese FIRE: <b id="wi-e-l">${fmt(st.exp)}</b></label>
@@ -975,12 +1050,15 @@
     // Data
     const dataBody = el('div', 'row');
     const expBtn = el('button', 'btn', 'Esporta JSON'); expBtn.onclick = doExport;
-    const impBtn = el('button', 'btn', 'Importa JSON');
     const impInput = el('input'); impInput.type = 'file'; impInput.accept = '.json'; impInput.style.display = 'none';
-    impInput.onchange = doImport; impBtn.onclick = () => impInput.click();
+    impInput.onchange = doImport;
+    const impBtn = el('button', 'btn', 'Importa (sostituisci)');
+    impBtn.onclick = () => { impInput.dataset.mode = 'replace'; impInput.click(); };
+    const mergeBtn = el('button', 'btn', 'Importa e unisci');
+    mergeBtn.onclick = () => { impInput.dataset.mode = 'merge'; impInput.click(); };
     const demoBtn = el('button', 'btn', 'Carica dati demo'); demoBtn.onclick = () => { if (confirm('Sovrascrive i dati attuali con il demo?')) { seedDemo(); render(); } };
     const wipeBtn = el('button', 'btn neg', 'Cancella tutto'); wipeBtn.onclick = doWipe;
-    [expBtn, impBtn, impInput, demoBtn, wipeBtn].forEach(b => dataBody.appendChild(b));
+    [expBtn, impBtn, mergeBtn, impInput, demoBtn, wipeBtn].forEach(b => dataBody.appendChild(b));
     main.appendChild(card('Dati', dataBody));
   }
 
@@ -998,13 +1076,53 @@
   function archiveAccount(id) {
     const acc = E.accountById(data, id);
     const months = E.monthSeries(data);
-    let lastBal = null;
-    for (let i = months.length - 1; i >= 0; i--) { const s = E.getSnapshot(data, id, months[i]); if (s) { lastBal = s.balancePayday; break; } }
+    let lastBal = null, lastMonth = null;
+    for (let i = months.length - 1; i >= 0; i--) { const s = E.getSnapshot(data, id, months[i]); if (s) { lastBal = s.balancePayday; lastMonth = months[i]; break; } }
     if (lastBal) {
-      if (!confirm(`Saldo finale ${fmt(lastBal)} — registra un trasferimento interno verso il conto di destinazione per non perdere la continuità del patrimonio. Procedere con l'archiviazione?`)) return;
+      // Non-zero final balance: offer to record a transfer to a destination so
+      // the money's continuity is preserved (spec §1.1).
+      openArchiveModal(acc, lastBal, lastMonth);
+      return;
     }
     acc.archivedAt = lastMonthWith(currentMonth());
     save(); render();
+  }
+
+  // Mini modal: "register a transfer of the closing balance to ___" then archive.
+  function openArchiveModal(acc, lastBal, lastMonth) {
+    const dest = E.accountsActiveAt(data, lastMonth).filter(a => a.id !== acc.id);
+    const overlay = el('div', 'modal-overlay');
+    const modal = el('div', 'modal'); modal.style.maxWidth = '460px';
+    overlay.appendChild(modal);
+    const close = () => overlay.remove();
+    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    modal.innerHTML = `<div class="modal-head"><h2>Archivia ${acc.name}</h2><button class="close" id="am-x">×</button></div>
+      <div class="modal-body">
+        <p>Saldo finale <b>${fmt(lastBal)}</b> a ${E.monthLabelIT(lastMonth)}. Registra un trasferimento verso il conto di destinazione per non perdere la continuità del patrimonio.</p>
+        <div class="form-row"><label>Destinazione</label>
+          <select id="am-dest">${dest.map(a => `<option value="${a.id}">${a.name}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Mese</label><input id="am-month" value="${lastMonth}" style="max-width:110px"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="am-skip">Archivia senza trasferimento</button>
+        <button class="btn primary" id="am-go">Registra trasferimento e archivia</button>
+      </div>`;
+    modal.querySelector('#am-x').onclick = close;
+    modal.querySelector('#am-skip').onclick = () => { acc.archivedAt = lastMonth; save(); close(); render(); };
+    modal.querySelector('#am-go').onclick = () => {
+      const destId = modal.querySelector('#am-dest').value;
+      const m = modal.querySelector('#am-month').value || lastMonth;
+      if (destId) {
+        const e = E.getEntry(data, m) || { yearMonth: m, salaryNet: 0, extraSalary: 0, otherIncome: 0, paydayDayOfMonth: data.settings.defaultPaydayDayOfMonth, contributions: [], internalTransfers: [], flags: [] };
+        e.internalTransfers = e.internalTransfers || [];
+        e.internalTransfers.push({ id: uuid(), fromAccountId: acc.id, toAccountId: destId, amount: lastBal, note: 'chiusura ' + acc.name });
+        data.entries[m] = e;
+      }
+      acc.archivedAt = m;
+      save(); close(); render();
+    };
+    if (!dest.length) { modal.querySelector('#am-go').disabled = true; }
+    document.body.appendChild(overlay);
   }
   function deleteAccount(id) {
     const hasSnap = Object.values(data.snapshots).some(s => s.accountId === id);
@@ -1030,20 +1148,43 @@
     URL.revokeObjectURL(url);
   }
   function doImport(ev) {
+    const mode = ev.target.dataset.mode || 'replace';
     const file = ev.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const parsed = JSON.parse(reader.result);
         const migrated = migrate(parsed);
-        const accDiff = (migrated.accounts || []).length;
-        const monthDiff = E.monthSeries(migrated).length;
-        if (confirm(`Importare? Conti: ${accDiff}, mesi: ${monthDiff}. Sostituisce i dati attuali.`)) {
-          data = migrated; save(); render();
+        if (mode === 'merge') {
+          const before = { acc: data.accounts.length, snaps: Object.keys(data.snapshots).length, months: E.monthSeries(data).length };
+          const merged = mergeData(data, migrated);
+          const addedAcc = merged.accounts.length - before.acc;
+          const addedSnaps = Object.keys(merged.snapshots).length - before.snaps;
+          const addedMonths = E.monthSeries(merged).length - before.months;
+          if (confirm(`Unisci? +${addedAcc} conti, +${addedMonths} mesi, ${addedSnaps >= 0 ? '+' : ''}${addedSnaps} saldi (i valori importati sovrascrivono quelli esistenti per gli stessi id/mesi).`)) {
+            data = merged; save(); render();
+          }
+        } else {
+          const accDiff = (migrated.accounts || []).length;
+          const monthDiff = E.monthSeries(migrated).length;
+          if (confirm(`Importare? Conti: ${accDiff}, mesi: ${monthDiff}. SOSTITUISCE tutti i dati attuali.`)) {
+            data = migrated; save(); render();
+          }
         }
       } catch (e) { alert('File non valido: ' + e.message); }
+      ev.target.value = '';
     };
     reader.readAsText(file);
+  }
+  // Merge imported data into current, keyed by id (accounts) and key (snapshots
+  // / entries). Imported values win on collision; nothing is deleted.
+  function mergeData(cur, inc) {
+    const out = JSON.parse(JSON.stringify(cur));
+    const haveAcc = new Set(out.accounts.map(a => a.id));
+    (inc.accounts || []).forEach(a => { if (!haveAcc.has(a.id)) out.accounts.push(a); });
+    Object.assign(out.snapshots, inc.snapshots || {});
+    Object.assign(out.entries, inc.entries || {});
+    return out;
   }
   function doWipe() {
     const t = prompt('Digita CONFERMA per cancellare tutti i dati.');
@@ -1058,10 +1199,20 @@
       paydayDayOfMonth: data.settings.defaultPaydayDayOfMonth,
       contributions: [], internalTransfers: [], flags: [],
     };
+    // Prefill: for a brand-new month, carry forward each account's last balance
+    // (editable). Existing months keep their saved values untouched.
+    const prevYM = E.ymPrev(ym);
+    const isNewMonth = !existing && !E.monthSeries(data).includes(ym);
     const draftSnaps = {};
     (data.accounts || []).forEach(a => {
       const s = E.getSnapshot(data, a.id, ym);
-      draftSnaps[a.id] = s ? Object.assign({}, s) : { accountId: a.id, yearMonth: ym, balancePayday: null, balancePaydayMinus1: null };
+      if (s) { draftSnaps[a.id] = Object.assign({}, s); return; }
+      const prev = isNewMonth ? E.getSnapshot(data, a.id, prevYM) : null;
+      draftSnaps[a.id] = {
+        accountId: a.id, yearMonth: ym,
+        balancePayday: prev && prev.balancePayday != null ? prev.balancePayday : null,
+        balancePaydayMinus1: null,
+      };
     });
 
     const overlay = el('div', 'modal-overlay');
@@ -1082,7 +1233,7 @@
       modal.innerHTML = `<div class="modal-head"><h2>Mese ${E.monthLabelIT(ym)}</h2><button class="close" id="ef-close">×</button></div>
         <div class="modal-body">
           <section><h3>1. Entrate</h3>
-            <div class="form-row"><label>Stipendio netto</label><input type="number" id="ef-salary" value="${entry.salaryNet || 0}"></div>
+            <div class="form-row"><label>Stipendio netto</label><input type="number" id="ef-salary" value="${entry.salaryNet || 0}"><button class="suggest" id="ef-salary-suggest" title="Saldo payday − saldo giorno−1 dei conti correnti"></button></div>
             <div class="form-row"><label>Extra (13ª/14ª/bonus)</label><input type="number" id="ef-extra" value="${entry.extraSalary || 0}"></div>
             <div class="form-row"><label>Altre entrate</label><input type="number" id="ef-other" value="${entry.otherIncome || 0}"></div>
             <div class="form-row"><label>Giorno payday</label><input type="number" id="ef-payday" value="${entry.paydayDayOfMonth}"></div>
@@ -1100,7 +1251,7 @@
               ${pensionAccs.map(a => `<div class="form-row"><label>${a.name}</label><input type="number" data-snap-payday="${a.id}" value="${valOr(draftSnaps[a.id].balancePayday)}"></div>`).join('')}
             </details>` : ''}
           </section>
-          <section><h3>4. Contributi</h3><div id="ef-contribs"></div>
+          <section><h3>4. Contributi</h3><div id="ef-ghosts"></div><div id="ef-contribs"></div>
             <button class="btn small" id="ef-add-contrib">+ Aggiungi contributo</button></section>
           <section><h3>5. Trasferimenti interni</h3><div id="ef-transfers"></div>
             <button class="btn small" id="ef-add-transfer">+ Aggiungi trasferimento</button></section>
@@ -1108,8 +1259,12 @@
         <div class="modal-foot" id="ef-summary"></div>
         <div class="modal-actions"><button class="btn" id="ef-cancel">Annulla</button><button class="btn primary" id="ef-save">Salva</button></div>`;
 
-      renderContribs(); renderTransfers(); updateSummary();
+      renderContribs(); renderTransfers(); renderGhosts(); refreshSalarySuggest(); updateSummary();
       $('#ef-close').onclick = close; $('#ef-cancel').onclick = close;
+      $('#ef-salary-suggest').onclick = () => {
+        const v = suggestedSalary();
+        if (v != null) { entry.salaryNet = v; $('#ef-salary').value = v; updateSummary(); }
+      };
       $('#ef-add-contrib').onclick = () => { entry.contributions.push({ id: uuid(), accountId: (active.find(a => a.type !== 'current') || active[0]).id, amount: 0, kind: 'recurring', source: 'current' }); renderContribs(); updateSummary(); };
       $('#ef-add-transfer').onclick = () => { entry.internalTransfers.push({ id: uuid(), fromAccountId: curAccs[0] ? curAccs[0].id : active[0].id, toAccountId: active[1] ? active[1].id : active[0].id, amount: 0, note: null }); renderTransfers(); updateSummary(); };
       $('#ef-save').onclick = saveEntry;
@@ -1134,7 +1289,37 @@
         const v = i.value === '' ? null : +i.value;
         draftSnaps[i.dataset.snapMinus1].balancePaydayMinus1 = v;
       });
+      refreshSalarySuggest();
       updateSummary();
+    }
+    // salaryNet ≈ Σ(payday) − Σ(day−1) across current accounts this month.
+    function suggestedSalary() {
+      let payday = 0, minus1 = 0, ok = false;
+      curAccs.forEach(a => {
+        const d = draftSnaps[a.id];
+        if (d.balancePayday != null && d.balancePaydayMinus1 != null) { payday += d.balancePayday; minus1 += d.balancePaydayMinus1; ok = true; }
+      });
+      return ok ? Math.round(payday - minus1) : null;
+    }
+    function refreshSalarySuggest() {
+      const btn = $('#ef-salary-suggest'); if (!btn) return;
+      const v = suggestedSalary();
+      btn.textContent = v == null ? '' : `usa ${fmt(v)}`;
+      btn.style.display = v == null || v === (+($('#ef-salary').value) || 0) ? 'none' : '';
+    }
+    function renderGhosts() {
+      const box = $('#ef-ghosts'); if (!box) return;
+      const prev = E.getEntry(data, prevYM);
+      const recurring = (prev && prev.contributions || []).filter(c => c.kind === 'recurring');
+      if (!recurring.length) { box.innerHTML = ''; return; }
+      box.innerHTML = `<div class="ghost">Ricorrenti del mese scorso: ${recurring.map((c, i) => {
+        const a = E.accountById(data, c.accountId);
+        return `${a ? a.name : '?'} ${fmt(c.amount)}<button class="link" data-ghost="${i}">copia</button>`;
+      }).join(' · ')}<button class="link" data-ghost-all>copia tutti</button></div>`;
+      const copy = (c) => { entry.contributions.push({ id: uuid(), accountId: c.accountId, amount: c.amount, kind: 'recurring', source: c.source || 'current' }); };
+      box.querySelectorAll('[data-ghost]').forEach(b => b.onclick = () => { copy(recurring[+b.dataset.ghost]); renderContribs(); updateSummary(); });
+      const all = box.querySelector('[data-ghost-all]');
+      if (all) all.onclick = () => { recurring.forEach(copy); renderContribs(); updateSummary(); };
     }
     function renderContribs() {
       const box = $('#ef-contribs'); box.innerHTML = '';
@@ -1246,5 +1431,5 @@
   window.addEventListener('DOMContentLoaded', render);
   if (document.readyState !== 'loading') render();
   // expose for debugging/tests in browser
-  window.FD = { get data() { return data; }, load, save, render, seedDemo, go };
+  window.FD = { get data() { return data; }, load, save, render, seedDemo, go, openEntry: openEntryForm };
 })();

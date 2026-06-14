@@ -373,6 +373,49 @@ console.log('\n=== Scenario 7b: FIRE capital excludes cash/savings ===');
 }
 
 /* =====================================================================
+   SCENARIO 7c — trailing invested & personal return (§2.5)
+   ===================================================================== */
+console.log('\n=== Scenario 7c: trailing invested & personal return ===');
+{
+  const d = newData();
+  const bank = addAccount(d, 'Bank', 'current');
+  const broker = addAccount(d, 'Broker', 'broker');
+  // Baseline: current account returns to 1500 each cycle; payday = 1500 + salary.
+  snap(d, bank, '2025-12', 3500, 1500);
+  snap(d, broker, '2025-12', 10000, null);
+  entry(d, '2025-12', { salaryNet: 2000 });
+  // Each month: salary 2000, spend 1500, invest 500 (market flat)
+  ['2026-01', '2026-02', '2026-03'].forEach((ym, i) => {
+    snap(d, bank, ym, 3500, 1500);
+    snap(d, broker, ym, 10000 + 500 * (i + 1), null);
+    entry(d, ym, { salaryNet: 2000, contributions: [contrib(broker, 500, 'current')] });
+  });
+  test('trailingInvested ≈ 500/month', () => {
+    approx(E.trailingInvested(d, 12), 500, 1);
+  });
+  test('personalReturn 2026 ≈ 0 when all growth is contributions (no market)', () => {
+    const pr = E.personalReturn(d, 2026);
+    assert.ok(pr != null);
+    approx(pr.ret, 0, 0.01);
+    approx(pr.netFlow, 1500, 1); // 3 × 500
+  });
+  test('personalReturn reflects market gain when balance outgrows contributions', () => {
+    const d2 = newData();
+    const bk = addAccount(d2, 'Bank', 'current');
+    const br = addAccount(d2, 'Broker', 'broker');
+    snap(d2, bk, '2025-12', 2000, 1500);
+    snap(d2, br, '2025-12', 10000, null);
+    entry(d2, '2025-12', {});
+    // one month: no contributions, broker +1000 (pure market) → return ≈ 1000/10000 = 10%
+    snap(d2, bk, '2026-01', 2000, 1500);
+    snap(d2, br, '2026-01', 11000, null);
+    entry(d2, '2026-01', {});
+    const pr = E.personalReturn(d2, 2026);
+    approx(pr.ret, 0.10, 0.001);
+  });
+}
+
+/* =====================================================================
    SCENARIO 8 — FIRE math sanity
    ===================================================================== */
 console.log('\n=== Scenario 8: FIRE math ===');
