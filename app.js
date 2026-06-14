@@ -549,15 +549,16 @@
     grid.appendChild(fnCard);
     $$('[data-swr]', fnBody).forEach(b => b.onclick = () => { f.swr = parseFloat(b.dataset.swr); save(); render(); });
 
-    // 3.2 Coast FIRE
+    // 3.2 Coast FIRE — uses FIRE capital (investments), not total liquid.
     const today = currentMonth();
-    const liquid = E.liquidNetWorth(data, lastMonthWith(today)) || 0;
+    const liquid = E.fireCapital(data, lastMonthWith(today)) || 0;
     const age = E.ageAt(data.settings.birthDate, today);
     const coastBase = E.coastFire(f, liquid, age, f.realReturnBase);
     const coastOpt = E.coastFire(f, liquid, age, f.realReturnOptimistic);
     const coastBody = el('div');
     coastBody.innerHTML = `
-      <div class="muted small">Patrimonio liquido attuale: ${fmt(liquid)} · età: ${age.toFixed(1)}</div>
+      ${fireCapitalCaption()}
+      <div class="muted small">Capitale FIRE attuale: ${fmt(liquid)} · età: ${age.toFixed(1)}</div>
       <table class="mini"><tr><th></th><th>5%</th><th>7%</th></tr>
         <tr><td>Coast number @ ${f.coastAge}</td><td>${fmt(coastBase.coastNumberAtCoastAge)}</td><td>${fmt(coastOpt.coastNumberAtCoastAge)}</td></tr>
         <tr><td>Richiesto oggi</td><td>${fmt(coastBase.requiredToday)}</td><td>${fmt(coastOpt.requiredToday)}</td></tr>
@@ -584,6 +585,15 @@
     return months.length ? months[months.length - 1] : ym;
   }
 
+  // Small caption listing which accounts feed the FIRE math, so it's never a
+  // mystery what "capitale FIRE" includes.
+  function fireCapitalCaption() {
+    const active = E.accountsActiveAt(data, lastMonthWith(currentMonth()));
+    const incl = active.filter(a => E.includesInFire(a)).map(a => a.name);
+    const txt = incl.length ? incl.join(', ') : 'nessun conto — configura in Impostazioni';
+    return `<div class="note small">Capitale FIRE = <b>${txt}</b>. <span class="muted">Cash e risparmi esclusi (modifica in Impostazioni → Conti).</span></div>`;
+  }
+
   function onTrackCard() {
     const body = el('div');
     const plans = data.plans || [];
@@ -596,7 +606,7 @@
     const plan = plans[plans.length - 1];
     const months = E.monthSeries(data).filter(m => E.ymCompare(m, plan.createdAt) >= 0);
     const curve = E.planProjectionCurve(plan, months);
-    const actual = months.map(m => E.liquidNetWorth(data, m));
+    const actual = months.map(m => E.fireCapital(data, m));
     body.appendChild(canvas('c-ontrack'));
     const lastActual = actual[actual.length - 1], lastPlan = curve[months[months.length - 1]];
     const diff = (lastActual != null) ? E.r2(lastActual - lastPlan) : null;
@@ -622,7 +632,7 @@
   }
   function rebaseline() {
     const today = lastMonthWith(currentMonth());
-    const liquid = E.liquidNetWorth(data, today) || 0;
+    const liquid = E.fireCapital(data, today) || 0;
     const plan = {
       createdAt: today,
       startingLiquidNetWorth: liquid,
@@ -640,7 +650,7 @@
     const f = data.settings.fire;
     const today = currentMonth();
     if (!projState) projState = {
-      start: E.liquidNetWorth(data, lastMonthWith(today)) || 0,
+      start: E.fireCapital(data, lastMonthWith(today)) || 0,
       monthly: 2000, applyBox3: true,
     };
     const body = el('div');
@@ -700,7 +710,7 @@
       const today = currentMonth();
       const age = E.ageAt(data.settings.birthDate, today);
       const res = E.monteCarlo({
-        start: E.liquidNetWorth(data, lastMonthWith(today)) || 0,
+        start: E.fireCapital(data, lastMonthWith(today)) || 0,
         monthlyContribution: projState ? projState.monthly : 2000,
         currentAge: age, fireAge: f.fireAge, pensionStartAge: f.pensionStartAge,
         monthlyExpenseFire: f.monthlyExpenseFire, expectedPensionMonthly: f.expectedPensionMonthly,
@@ -732,7 +742,7 @@
   function whatIfCard() {
     const f = data.settings.fire;
     const today = currentMonth();
-    const start = E.liquidNetWorth(data, lastMonthWith(today)) || 0;
+    const start = E.fireCapital(data, lastMonthWith(today)) || 0;
     const st = { contrib: 2000, ret: f.realReturnBase, exp: f.monthlyExpenseFire };
     const body = el('div');
     body.innerHTML = `
@@ -900,6 +910,7 @@
         <span class="badge">${a.type}</span>
         <span class="badge ${E.isLiquid(a) ? 'liq' : 'lock'}">${E.isLiquid(a) ? 'liquid' : 'locked'}</span>
         <span class="muted small">${a.archivedAt ? 'archiviato ' + a.archivedAt : 'attivo'}</span>
+        ${E.isLiquid(a) ? `<label class="toggle small" title="Includi nel capitale per i calcoli FIRE"><input type="checkbox" data-fire="${a.id}" ${E.includesInFire(a) ? 'checked' : ''}> FIRE</label>` : ''}
         <span class="acc-actions">
           ${a.archivedAt ? `<button class="link" data-restore="${a.id}">ripristina</button>` : `<button class="link" data-archive="${a.id}">archivia</button>`}
           <button class="link neg" data-del="${a.id}">elimina</button>
@@ -978,6 +989,7 @@
     $$('[data-archive]', root).forEach(b => b.onclick = () => archiveAccount(b.dataset.archive));
     $$('[data-restore]', root).forEach(b => b.onclick = () => { E.accountById(data, b.dataset.restore).archivedAt = null; save(); render(); });
     $$('[data-del]', root).forEach(b => b.onclick = () => deleteAccount(b.dataset.del));
+    $$('[data-fire]', root).forEach(c => c.onchange = () => { E.accountById(data, c.dataset.fire).includeInFire = c.checked; save(); render(); });
     $('#na-add', root).onclick = () => {
       const name = $('#na-name').value.trim(); if (!name) return;
       data.accounts.push(mkAccount(name, $('#na-type').value)); save(); render();

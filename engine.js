@@ -127,6 +127,22 @@
   function liquidNetWorth(data, ym) {
     return sumBalances(data, ym, isLiquid);
   }
+  // Whether an account counts toward FIRE capital (the compounding investment
+  // base used for projections/Coast/Monte Carlo). Cash buffers (current) and
+  // savings sit idle and should NOT be projected at market returns, so the
+  // default is broker-only. A per-account `includeInFire` boolean overrides.
+  function defaultIncludeInFire(acc) {
+    return acc.type === 'broker';
+  }
+  function includesInFire(acc) {
+    if (!isLiquid(acc)) return false; // pensions are the separate post-67 pillar
+    return acc.includeInFire == null ? defaultIncludeInFire(acc) : !!acc.includeInFire;
+  }
+  // Investable capital used for all FIRE math (≠ liquid net worth, which also
+  // includes idle cash/savings).
+  function fireCapital(data, ym) {
+    return sumBalances(data, ym, includesInFire);
+  }
   function lockedNetWorth(data, ym) {
     return sumBalances(data, ym, a => !isLiquid(a));
   }
@@ -593,6 +609,7 @@
     currentAccounts, monthSeries,
     // §2
     liquidNetWorth, lockedNetWorth, totalNetWorth,
+    defaultIncludeInFire, includesInFire, fireCapital,
     sumCurrent, contributionSplit, transferCurrentSplit,
     contributionsForAccount, transfersForAccount,
     estimatedExpenses, totalIncome, investedAndSavings, reconcile,
