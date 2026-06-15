@@ -357,6 +357,22 @@
     return r2(vals.reduce((a, b) => a + b, 0) / vals.length);
   }
 
+  // Median monthly invested over the last n months — robust to one-off lumps
+  // (a few big deposits won't drag it up the way the mean does). Better default
+  // for "sustainable monthly contribution" in projections.
+  function medianInvested(data, n) {
+    const ms = monthSeries(data);
+    const vals = [];
+    for (let i = ms.length - 1; i >= 0 && vals.length < (n || 12); i--) {
+      const is = investedAndSavings(data, ms[i]);
+      if (is.invested != null && isFinite(is.invested)) vals.push(is.invested);
+    }
+    if (!vals.length) return null;
+    vals.sort((a, b) => a - b);
+    const mid = Math.floor(vals.length / 2);
+    return r2(vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2);
+  }
+
   // §2.5 Approximate annualized personal return (Simple Dietz) for one calendar
   // year over the accounts matching `pred` (default: FIRE-capital accounts).
   //   return ≈ marketGrowth_year / (startBalance + netFlow_year / 2)
@@ -677,7 +693,7 @@
     contributionsForAccount, transfersForAccount,
     estimatedExpenses, totalIncome, investedAndSavings, reconcile,
     marketGrowthForAccount, portfolioMarketGrowth, portfolioContributions,
-    netFlowForAccount, trailingInvested, personalReturn,
+    netFlowForAccount, trailingInvested, medianInvested, personalReturn,
     buildMonthlyTable, rollingAvg,
     // §3
     annuityPV, fireNumberSimple, fireNumberTwoPhase, coastFire,

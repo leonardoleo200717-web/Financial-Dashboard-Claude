@@ -92,6 +92,44 @@ Y26.forEach((r, i) => {
 });
 snap(GENER, '2026-05', 10000);
 
+/* ----------------- reconstructed internal transfers ------------------ */
+/* These moves were not in the sheet but are evident from the balances /
+   confirmed by Leonardo: money shifted between accounts (not spending), which
+   is why the raw expense calc broke. Each is inferred from a matching balance
+   drop in the source account. Transfers don't change net worth — they just
+   stop the engine from reading inter-account moves as spending or "market". */
+function addTransfer(yMonth, from, to, amount, note) {
+  const e = entries[yMonth];
+  e.internalTransfers.push({ id: uid('t-'), fromAccountId: from.id, toAccountId: to.id, amount, note });
+}
+function setContribAmountSource(yMonth, acc, amount, source) {
+  const c = (entries[yMonth].contributions || []).find(x => x.accountId === acc.id);
+  if (c) { c.amount = amount; c.source = source; }
+}
+
+// 2025-02: the €11.200 Scalable deposit came from ABN savings (untracked in
+// 2025), not the bank cycle → mark external so it doesn't count as spending.
+setContribAmountSource('2025-02', SCAL, 11200, 'external');
+
+// 2025-07: Trade Republic 25.192 → 3.000 (−22.192) funded most of Scalable's
+// +31.811. Model Trade→Scalable 22.192; the remainder (~7.808) from the bank.
+addTransfer('2025-07', TRADE, SCAL, 22192, 'da Trade Republic a Scalable');
+setContribAmountSource('2025-07', SCAL, 7808, 'current');
+
+// 2026-01: ABN's high December balance (44.598) was largely moved into the ABN
+// savings pot (opened at 30.847) — bank→ABN Savings.
+addTransfer('2026-01', ABN, ABNsav, 30847, 'accantonamento su deposito ABN');
+
+// 2026-02: EquatePlus liquidated (14.152 → 0), cash landed in ABN.
+addTransfer('2026-02', EQUATE, ABN, 14152, 'liquidazione EquatePlus');
+
+// 2026-03: ABN Savings 34.202 → 13.202 (−21.000) as Scalable Savings opened at 20.000.
+addTransfer('2026-03', ABNsav, SCALsav, 20000, 'da deposito ABN a deposito Scalable');
+
+// 2026-04: Trade Republic closed (1.600 → 0) and ABN Savings −4.202, both into ABN.
+addTransfer('2026-04', TRADE, ABN, 1600, 'chiusura Trade Republic');
+addTransfer('2026-04', ABNsav, ABN, 4202, 'prelievo da deposito ABN');
+
 /* ------------------------------ settings ----------------------------- */
 const data = {
   schemaVersion: 2,

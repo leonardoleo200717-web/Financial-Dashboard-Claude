@@ -72,6 +72,27 @@ function run() {
     if (!window.__charts) throw new Error('no charts created');
   });
 
+  t('info ⓘ button toggles an explanation panel', () => {
+    window.FD.go('andamento');
+    const info = document.querySelector('.info-btn');
+    if (!info) throw new Error('no info button');
+    const pop = info.parentElement.nextElementSibling;
+    if (!pop || !pop.classList.contains('info-pop')) throw new Error('no info pop');
+    const before = pop.style.display;
+    info.click();
+    if (pop.style.display === before) throw new Error('info pop did not toggle');
+  });
+
+  t('enlarge ⤢ button opens a chart modal', () => {
+    window.FD.go('andamento');
+    const exp = document.querySelector('.enlarge-btn');
+    if (!exp) throw new Error('no enlarge button');
+    exp.click();
+    const modal = document.querySelector('.chart-modal');
+    if (!modal) throw new Error('chart modal did not open');
+    modal.parentElement.remove();
+  });
+
   t('storico table has rows', () => {
     window.FD.go('storico');
     const rows = document.querySelectorAll('.data-row');
