@@ -338,6 +338,69 @@
     return any ? r2(sum) : null;
   }
 
+  // Net flow into a single account from an entry (contributions + transfers).
+  function netFlowForAccount(entry, accId) {
+    return r2(contributionsForAccount(entry, accId) + transfersForAccount(entry, accId));
+  }
+
+  // Trailing average of monthly invested amount (§2.3) over the last n months
+  // that have a computable value. Used to seed projections with the user's
+  // *actual* savings pace instead of a hardcoded guess.
+  function trailingInvested(data, n) {
+    const ms = monthSeries(data);
+    const vals = [];
+    for (let i = ms.length - 1; i >= 0 && vals.length < (n || 12); i--) {
+      const is = investedAndSavings(data, ms[i]);
+      if (is.invested != null && isFinite(is.invested)) vals.push(is.invested);
+    }
+    if (!vals.length) return null;
+    return r2(vals.reduce((a, b) => a + b, 0) / vals.length);
+  }
+
+  // §2.5 Approximate annualized personal return (Simple Dietz) for one calendar
+  // year over the accounts matching `pred` (default: FIRE-capital accounts).
+  //   return ≈ marketGrowth_year / (startBalance + netFlow_year / 2)
+  function personalReturn(data, year, pred) {
+    pred = pred || (a => includesInFire(a));
+    const accs = (data.accounts || []).filter(pred);
+    if (!accs.length) return null;
+    const yStr = String(year);
+    const ms = monthSeries(data).filter(m => m.slice(0, 4) === yStr);
+    if (!ms.length) return null;
+
+    // start value = portfolio at the month before the first in-year month.
+    // If that month has no data (e.g. the very first tracked year), fall back to
+    // using the first in-year month as the baseline and count growth from there.
+    let start = 0, startAny = false;
+    const firstPrev = ymPrev(ms[0]);
+    accs.forEach(a => {
+      const s = getSnapshot(data, a.id, firstPrev);
+      if (s && s.balancePayday != null) { start += s.balancePayday; startAny = true; }
+    });
+    let growthMonths = ms;
+    if (!startAny) {
+      accs.forEach(a => {
+        const s = getSnapshot(data, a.id, ms[0]);
+        if (s && s.balancePayday != null) { start += s.balancePayday; startAny = true; }
+      });
+      growthMonths = ms.slice(1); // first month is the baseline
+    }
+    if (!startAny || !growthMonths.length) return null;
+
+    let mg = 0, flow = 0;
+    growthMonths.forEach(m => {
+      const entry = getEntry(data, m);
+      accs.forEach(a => {
+        const g = marketGrowthForAccount(data, m, a.id);
+        if (g != null) mg += g;
+        flow += netFlowForAccount(entry, a.id);
+      });
+    });
+    const denom = start + flow / 2;
+    if (!denom) return null;
+    return { year, ret: mg / denom, marketGrowth: r2(mg), netFlow: r2(flow), startBalance: r2(start) };
+  }
+
   // Net contributions across portfolio (source=current only → "money I saved").
   function portfolioContributions(data, ym) {
     const entry = getEntry(data, ym);
@@ -614,6 +677,7 @@
     contributionsForAccount, transfersForAccount,
     estimatedExpenses, totalIncome, investedAndSavings, reconcile,
     marketGrowthForAccount, portfolioMarketGrowth, portfolioContributions,
+    netFlowForAccount, trailingInvested, personalReturn,
     buildMonthlyTable, rollingAvg,
     // §3
     annuityPV, fireNumberSimple, fireNumberTwoPhase, coastFire,

@@ -78,6 +78,28 @@ function run() {
     if (!rows.length) throw new Error('no data rows');
   });
 
+  t('FIRE tab shows headline progress + personal-return card', () => {
+    window.FD.go('fire');
+    const txt = document.body.textContent;
+    if (!/A che punto sei/.test(txt)) throw new Error('headline missing');
+    if (!document.querySelector('.progress-fill')) throw new Error('progress bar missing');
+    if (!/Rendimento personale/.test(txt)) throw new Error('personal return card missing');
+  });
+
+  t('new-month entry form prefills balances and offers ghost contributions', () => {
+    // open a fresh future month (2026-12) -> should carry forward balances
+    const ov = document.querySelector('.modal-overlay'); if (ov) ov.remove();
+    // 2026-04 is new; its predecessor 2026-03 has balances + a recurring contribution
+    window.FD.openEntry('2026-04');
+    const modal = document.querySelector('.modal');
+    if (!modal) throw new Error('entry modal did not open');
+    const paydayInputs = modal.querySelectorAll('[data-snap-payday]');
+    const anyPrefilled = Array.from(paydayInputs).some(i => i.value !== '' && i.value !== '0');
+    if (!anyPrefilled) throw new Error('balances were not prefilled from previous month');
+    if (!/Ricorrenti del mese scorso/.test(modal.textContent)) throw new Error('ghost contributions missing');
+    document.querySelector('.modal-overlay').remove();
+  });
+
   t('entry form opens and shows transfer rows for 2026-03', () => {
     window.FD.go('storico');
     // open editor for the chain month via the engine-backed form
@@ -90,6 +112,46 @@ function run() {
     const modal = document.querySelector('.modal');
     if (!modal) throw new Error('modal did not open');
     if (!/Trasferimenti interni/.test(modal.textContent)) throw new Error('transfers section missing');
+    modal.parentElement.remove();
+  });
+
+  t('interaction: SWR chip updates the FIRE number', () => {
+    window.FD.go('fire');
+    const chip = document.querySelector('[data-swr="0.04"]');
+    if (!chip) throw new Error('swr chip missing');
+    chip.click();
+    if (window.FD.data.settings.fire.swr !== 0.04) throw new Error('swr did not update');
+  });
+
+  t('interaction: run Monte Carlo produces a probability', () => {
+    window.FD.go('fire');
+    const btn = Array.from(document.querySelectorAll('button')).find(b => /Esegui simulazione/.test(b.textContent));
+    if (!btn) throw new Error('monte carlo button missing');
+    btn.click();
+    if (!/Probabilità di successo/.test(document.body.textContent)) throw new Error('MC output missing');
+  });
+
+  t('interaction: toggle FIRE checkbox on an account in Settings', () => {
+    window.FD.go('impostazioni');
+    const cb = document.querySelector('[data-fire]');
+    if (!cb) throw new Error('no FIRE checkbox');
+    const id = cb.dataset.fire; const before = window.FD.data.accounts.find(a => a.id === id).includeInFire;
+    cb.checked = !cb.checked; cb.dispatchEvent(new window.Event('change'));
+    const after = window.FD.data.accounts.find(a => a.id === id).includeInFire;
+    if (after === before) throw new Error('includeInFire did not change');
+  });
+
+  t('interaction: edit + save a month persists balances', () => {
+    const ov = document.querySelector('.modal-overlay'); if (ov) ov.remove();
+    window.FD.openEntry('2026-02');
+    const inp = document.querySelector('[data-snap-payday]');
+    if (!inp) throw new Error('no balance input');
+    inp.value = '12345'; inp.dispatchEvent(new window.Event('input'));
+    const saveBtn = document.querySelector('#ef-save');
+    saveBtn.click();
+    const accId = inp.dataset.snapPayday;
+    const s = window.FD.data.snapshots[accId + '|2026-02'];
+    if (!s || s.balancePayday !== 12345) throw new Error('balance not saved');
   });
 
   t('no console.error / uncaught errors during smoke', () => {

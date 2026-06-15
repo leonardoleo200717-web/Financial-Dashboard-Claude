@@ -6,8 +6,11 @@
   "scripts": {
     "build": "node build.js",
     "test": "node build.js && node tests/run.js",
+    "test:property": "node build.js && node tests/property.js",
     "test:ui": "node build.js && node tests/ui-smoke.js",
-    "test:all": "node build.js && node tests/run.js && node tests/ui-smoke.js"
+    "test:fuzz": "node build.js && node tests/ui-fuzz.js",
+    "test:import": "node build.js && node tests/import-render.js",
+    "test:all": "node build.js && node tests/run.js && node tests/property.js && node tests/ui-smoke.js && node tests/ui-fuzz.js && node tests/import-render.js"
   },
   "devDependencies": {
     "jsdom": "*"
