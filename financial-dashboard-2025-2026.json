@@ -544,7 +544,7 @@
           "accountId": "acc-4",
           "amount": 11200,
           "kind": "recurring",
-          "source": "current"
+          "source": "external"
         }
       ],
       "internalTransfers": [],
@@ -667,12 +667,20 @@
         {
           "id": "c-21",
           "accountId": "acc-4",
-          "amount": 30000,
+          "amount": 7808,
           "kind": "recurring",
           "source": "current"
         }
       ],
-      "internalTransfers": [],
+      "internalTransfers": [
+        {
+          "id": "t-33",
+          "fromAccountId": "acc-6",
+          "toAccountId": "acc-4",
+          "amount": 22192,
+          "note": "da Trade Republic a Scalable"
+        }
+      ],
       "flags": []
     },
     "2025-08": {
@@ -755,7 +763,15 @@
           "source": "current"
         }
       ],
-      "internalTransfers": [],
+      "internalTransfers": [
+        {
+          "id": "t-34",
+          "fromAccountId": "acc-1",
+          "toAccountId": "acc-2",
+          "amount": 30847,
+          "note": "accantonamento su deposito ABN"
+        }
+      ],
       "flags": []
     },
     "2026-02": {
@@ -780,7 +796,15 @@
           "source": "current"
         }
       ],
-      "internalTransfers": [],
+      "internalTransfers": [
+        {
+          "id": "t-35",
+          "fromAccountId": "acc-3",
+          "toAccountId": "acc-1",
+          "amount": 14152,
+          "note": "liquidazione EquatePlus"
+        }
+      ],
       "flags": []
     },
     "2026-03": {
@@ -805,7 +829,15 @@
           "source": "current"
         }
       ],
-      "internalTransfers": [],
+      "internalTransfers": [
+        {
+          "id": "t-36",
+          "fromAccountId": "acc-2",
+          "toAccountId": "acc-5",
+          "amount": 20000,
+          "note": "da deposito ABN a deposito Scalable"
+        }
+      ],
       "flags": []
     },
     "2026-04": {
@@ -830,7 +862,22 @@
           "source": "current"
         }
       ],
-      "internalTransfers": [],
+      "internalTransfers": [
+        {
+          "id": "t-37",
+          "fromAccountId": "acc-6",
+          "toAccountId": "acc-1",
+          "amount": 1600,
+          "note": "chiusura Trade Republic"
+        },
+        {
+          "id": "t-38",
+          "fromAccountId": "acc-2",
+          "toAccountId": "acc-1",
+          "amount": 4202,
+          "note": "prelievo da deposito ABN"
+        }
+      ],
       "flags": []
     },
     "2026-05": {
@@ -884,13 +931,13 @@
     },
     "milestones": [
       {
-        "id": "ms-33",
+        "id": "ms-39",
         "date": "2027-05",
         "label": "Scadenza 30% ruling + Box 3",
         "note": null
       },
       {
-        "id": "ms-34",
+        "id": "ms-40",
         "date": "2030-12",
         "label": "iBonds Dec 2030 maturity — riallocare",
         "note": null

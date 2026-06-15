@@ -28,8 +28,20 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 16px; box-shadow: var(--shadow); }
-  .card-title { margin: 0 0 12px; font-size: 14px; font-weight: 700; }
+  .card-title { margin: 0; font-size: 14px; font-weight: 700; }
+  .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .info-btn { margin-left: auto; border: 0; background: var(--bg); color: var(--muted); width: 22px; height: 22px;
+    border-radius: 50%; cursor: pointer; font-size: 12px; line-height: 1; flex: 0 0 auto; }
+  .info-btn:hover { background: var(--accent); color: #fff; }
+  .info-pop { background: #f3f8fc; border: 1px solid #d6e6f2; border-radius: 8px; padding: 10px 12px;
+    font-size: 12.5px; line-height: 1.5; color: #34495e; margin-bottom: 12px; }
+  .info-pop code { background: #e8eef3; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
   .chart-wrap { position: relative; height: 280px; }
+  .enlarge-btn { position: absolute; top: -2px; right: 0; border: 0; background: transparent; color: var(--muted);
+    cursor: pointer; font-size: 16px; padding: 2px 4px; line-height: 1; z-index: 2; }
+  .enlarge-btn:hover { color: var(--accent); }
+  .chart-modal { width: min(1100px, 96vw); }
+  .big-chart { height: min(70vh, 640px); padding: 8px; }
   h2 { font-size: 20px; margin: 0 0 16px; }
   h3 { font-size: 14px; }
   .muted { color: var(--muted); }
@@ -487,6 +499,22 @@
     return r2(vals.reduce((a, b) => a + b, 0) / vals.length);
   }
 
+  // Median monthly invested over the last n months — robust to one-off lumps
+  // (a few big deposits won't drag it up the way the mean does). Better default
+  // for "sustainable monthly contribution" in projections.
+  function medianInvested(data, n) {
+    const ms = monthSeries(data);
+    const vals = [];
+    for (let i = ms.length - 1; i >= 0 && vals.length < (n || 12); i--) {
+      const is = investedAndSavings(data, ms[i]);
+      if (is.invested != null && isFinite(is.invested)) vals.push(is.invested);
+    }
+    if (!vals.length) return null;
+    vals.sort((a, b) => a - b);
+    const mid = Math.floor(vals.length / 2);
+    return r2(vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2);
+  }
+
   // §2.5 Approximate annualized personal return (Simple Dietz) for one calendar
   // year over the accounts matching `pred` (default: FIRE-capital accounts).
   //   return ≈ marketGrowth_year / (startBalance + netFlow_year / 2)
@@ -807,7 +835,7 @@
     contributionsForAccount, transfersForAccount,
     estimatedExpenses, totalIncome, investedAndSavings, reconcile,
     marketGrowthForAccount, portfolioMarketGrowth, portfolioContributions,
-    netFlowForAccount, trailingInvested, personalReturn,
+    netFlowForAccount, trailingInvested, medianInvested, personalReturn,
     buildMonthlyTable, rollingAvg,
     // §3
     annuityPV, fireNumberSimple, fireNumberTwoPhase, coastFire,
@@ -836,6 +864,7 @@
   /* ----------------------------- state -------------------------------- */
   let data = null;
   let charts = {};
+  let chartCfg = {};
 
   function uuid() {
     if (crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -1010,7 +1039,7 @@
     main.className = 'content';
     app.appendChild(main);
     Object.values(charts).forEach(c => { try { c.destroy(); } catch (e) {} });
-    charts = {};
+    charts = {}; chartCfg = {};
 
     if (E.monthSeries(data).length === 0 && activeTab !== 'impostazioni') {
       main.appendChild(emptyState());
@@ -1062,19 +1091,89 @@
     if (html != null) e.innerHTML = html;
     return e;
   }
-  function card(title, bodyNode) {
+  // card(title, body, infoHtml?) — when infoHtml is given, a ⓘ button in the
+  // header toggles a plain-language explanation panel.
+  function card(title, bodyNode, infoHtml) {
     const c = el('div', 'card');
-    if (title) c.appendChild(el('h3', 'card-title', title));
+    if (title) {
+      const head = el('div', 'card-head');
+      head.appendChild(el('h3', 'card-title', title));
+      if (infoHtml) {
+        const info = el('button', 'info-btn', 'ⓘ'); info.type = 'button'; info.title = 'Cosa mostra';
+        const pop = el('div', 'info-pop'); pop.innerHTML = infoHtml; pop.style.display = 'none';
+        info.onclick = (e) => { e.stopPropagation(); pop.style.display = pop.style.display === 'none' ? 'block' : 'none'; };
+        head.appendChild(info);
+        c.appendChild(head); c.appendChild(pop);
+      } else c.appendChild(head);
+    }
     if (bodyNode) c.appendChild(bodyNode);
     return c;
   }
+  // canvas(id) — chart container with an "enlarge" button that reopens the same
+  // chart config in a large modal. Charts must be created via makeChart(id,cfg).
   function canvas(id) {
     const wrap = el('div', 'chart-wrap');
+    const exp = el('button', 'enlarge-btn', '⤢'); exp.type = 'button'; exp.title = 'Ingrandisci';
+    exp.onclick = () => openChartModal(id);
     const cv = document.createElement('canvas');
-    cv.id = id; wrap.appendChild(cv); return wrap;
+    cv.id = id; wrap.appendChild(cv); wrap.appendChild(exp); return wrap;
   }
+  function makeChart(id, config) {
+    if (charts[id]) { try { charts[id].destroy(); } catch (e) {} }
+    chartCfg[id] = config;
+    charts[id] = new Chart($('#' + id), config);
+    return charts[id];
+  }
+  function openChartModal(id) {
+    const cfg = chartCfg[id]; if (!cfg) return;
+    const overlay = el('div', 'modal-overlay');
+    const modal = el('div', 'modal chart-modal');
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    modal.innerHTML = `<div class="modal-head"><h2>${id && chartTitles[id] || 'Grafico'}</h2><button class="close" id="cm-x">×</button></div>`;
+    const big = el('div', 'chart-wrap big-chart');
+    const cv = document.createElement('canvas'); big.appendChild(cv);
+    modal.appendChild(big);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    modal.querySelector('#cm-x').onclick = close;
+    // clone config so the modal chart is independent
+    new Chart(cv, JSON.parse(JSON.stringify(cfg, cfgReplacer)));
+  }
+  // Chart configs contain function callbacks; strip them for the deep clone and
+  // rely on defaults in the enlarged view (axes still format via the y options
+  // we keep as data, tooltips fall back to Chart defaults).
+  function cfgReplacer(k, v) { return typeof v === 'function' ? undefined : v; }
+  const chartTitles = {
+    'c-networth': 'Patrimonio nel tempo', 'c-contrib': 'Contributi vs Mercato',
+    'c-monthly': 'Crescita mensile', 'c-savings': 'Savings rate',
+    'c-expenses': 'Spese stimate', 'c-alloc': 'Allocazione',
+  };
   const fmt = E.fmtEUR;
   const fmtP = E.fmtPct;
+
+  /* ---- plain-language explanations shown via the ⓘ buttons ---- */
+  const INFO = {
+    networth: 'Il <b>patrimonio liquido</b> (linea piena) è la somma dei conti accessibili — corrente, depositi, broker — la base usata per i calcoli FIRE. Il <b>totale</b> (tratteggiato) aggiunge le pensioni. La linea grigia sono i <b>contributi cumulativi</b> (quanto hai versato), la riga rossa il tuo <b>FIRE number</b>.',
+    contrib: 'Scompone la crescita degli investimenti in due parti cumulate: i <b>contributi</b> (soldi che hai versato tu) e la <b>crescita di mercato</b> (quanto hanno reso). La distanza fra le due aree è il guadagno del mercato.',
+    monthly: 'Variazione del patrimonio liquido mese su mese (verde = su, rosso = giù). Nel tooltip la barra è divisa in <b>mercato</b> (rendimento) e <b>apporti netti</b> (versamenti e variazione di liquidità). I due si sommano alla barra.',
+    savings: 'Quota del reddito che NON spendi: <code>(reddito − spese − variazione liquidità) / reddito</code>. La linea arancione è la media a 12 mesi, più stabile.',
+    expenses: 'Spesa stimata del mese, ricavata dai saldi del conto corrente: <code>saldo iniziale + entrate − versamenti − trasferimenti − saldo finale</code>. NON la inserisci a mano. ⚠ Se in un mese sposti soldi tra conti senza registrarlo come trasferimento, qui può uscire un numero sbagliato (o negativo): registra il trasferimento per correggere.',
+    alloc: 'Come è distribuito il patrimonio tra i conti, mese per mese (aree impilate). Utile per vedere il peso di ciascun broker/deposito nel tempo.',
+  };
+
+  const INFO_FIRE = {
+    headline: 'Stima quando raggiungi il FIRE number partendo dal <b>capitale FIRE</b> di oggi e versando ogni mese l\'importo indicato (di default la <b>mediana</b> di quanto hai investito negli ultimi 12 mesi — robusta ai versamenti una-tantum). La barra mostra a che percentuale del FIRE number sei.',
+    number: 'Il <b>FIRE number</b> è il capitale che ti rende finanziariamente indipendente: spese annue ÷ SWR (Safe Withdrawal Rate). La versione <b>a due fasi</b> tiene conto che dall\'età pensionabile in poi arrivano le pensioni, quindi serve meno capitale.',
+    coast: '<b>Coast FIRE</b> = hai già abbastanza capitale investito perché, anche smettendo di versare oggi, la sola crescita composta ti porti al FIRE number entro l\'età obiettivo. Usa solo il capitale investito (broker), non la liquidità.',
+    ontrack: 'Confronta il tuo capitale reale con la curva del <b>piano salvato</b> (una proiezione congelata al momento del salvataggio). Ti dice se sei avanti o indietro rispetto a quel piano, in € e in mesi.',
+    projection: 'Proietta il capitale nel futuro al ritmo di versamento e al rendimento che imposti. Il <b>Box 3</b> è la patrimoniale olandese, applicata dalla data impostata. Cambia il contributo mensile: è un\'assunzione, non un dato fisso.',
+    montecarlo: 'Simula 1.000 possibili futuri con rendimenti casuali (non un singolo scenario liscio). La <b>probabilità di successo</b> è la quota di simulazioni in cui i soldi non finiscono prima dei 90 anni. Il ventaglio mostra gli scenari da sfortunato (P10) a fortunato (P90).',
+    whatif: 'Sposta i cursori per vedere subito l\'effetto sull\'anno di arrivo al FIRE, senza toccare i tuoi dati salvati. Utile per "e se versassi 500 in più?".',
+    personal: 'Il rendimento reale del tuo portafoglio per anno (metodo Simple Dietz, approssimato), confrontato con l\'ipotesi che usi nelle proiezioni. Verde = hai fatto meglio dell\'ipotesi.',
+  };
 
   /* ========================== TAB 1 — Andamento ===================== */
   function renderAndamento(main) {
@@ -1082,12 +1181,12 @@
     const grid = el('div', 'grid');
     main.appendChild(grid);
 
-    grid.appendChild(card('Patrimonio nel tempo', canvas('c-networth')));
-    grid.appendChild(card('Contributi vs Mercato', canvas('c-contrib')));
-    grid.appendChild(card('Crescita mensile', canvas('c-monthly')));
-    grid.appendChild(card('Savings rate', canvas('c-savings')));
-    grid.appendChild(card('Spese stimate', canvas('c-expenses')));
-    grid.appendChild(card('Allocazione', allocationBlock()));
+    grid.appendChild(card('Patrimonio nel tempo', canvas('c-networth'), INFO.networth));
+    grid.appendChild(card('Contributi vs Mercato', canvas('c-contrib'), INFO.contrib));
+    grid.appendChild(card('Crescita mensile', canvas('c-monthly'), INFO.monthly));
+    grid.appendChild(card('Savings rate', canvas('c-savings'), INFO.savings));
+    grid.appendChild(card('Spese stimate', canvas('c-expenses'), INFO.expenses));
+    grid.appendChild(card('Allocazione', allocationBlock(), INFO.alloc));
     grid.appendChild(countdownCard());
 
     drawNetWorth(months);
@@ -1110,7 +1209,7 @@
     let cum = 0; const cumContrib = months.map(m => { cum += E.portfolioContributions(data, m) || 0; return E.r2(cum); });
     const fire = E.fireNumberSimple(data.settings.fire);
     const labels = months.map(E.monthLabelIT);
-    charts.nw = new Chart($('#c-networth'), {
+    makeChart('c-networth', {
       type: 'line',
       data: {
         labels,
@@ -1133,7 +1232,7 @@
       cm += E.portfolioMarketGrowth(data, m) || 0;
       cumC.push(E.r2(cc)); cumM.push(E.r2(cm));
     });
-    charts.cm = new Chart($('#c-contrib'), {
+    makeChart('c-contrib', {
       type: 'line',
       data: {
         labels: months.map(E.monthLabelIT),
@@ -1152,7 +1251,7 @@
       const a = E.liquidNetWorth(data, m), b = E.liquidNetWorth(data, months[i - 1]);
       return (a != null && b != null) ? E.r2(a - b) : null;
     });
-    charts.mg = new Chart($('#c-monthly'), {
+    makeChart('c-monthly', {
       type: 'bar',
       data: {
         labels: months.map(E.monthLabelIT),
@@ -1167,9 +1266,13 @@
           tooltip: {
             callbacks: {
               afterBody: (items) => {
+                // Decompose so the parts sum to the bar exactly:
+                // Δ liquido = mercato + apporti netti (versamenti + variazione liquidità).
                 const i = items[0].dataIndex; const m = months[i];
-                const c = E.portfolioContributions(data, m), mk = E.portfolioMarketGrowth(data, m);
-                return ['Contributi: ' + fmt(c), 'Mercato: ' + fmt(mk)];
+                if (deltas[i] == null) return [];
+                const mk = E.portfolioMarketGrowth(data, m) || 0;
+                const apporti = E.r2(deltas[i] - mk);
+                return ['Mercato: ' + fmt(mk), 'Apporti netti: ' + fmt(apporti)];
               },
             },
           },
@@ -1182,7 +1285,7 @@
     const table = E.buildMonthlyTable(data);
     const sr = table.map(r => r.savingsRate);
     const roll = E.rollingAvg(sr, null, months, 12);
-    charts.sr = new Chart($('#c-savings'), {
+    makeChart('c-savings', {
       type: 'line',
       data: {
         labels: months.map(E.monthLabelIT),
@@ -1199,7 +1302,7 @@
     const exp = months.map(m => E.estimatedExpenses(data, m));
     const vals = exp.map(e => e.value);
     const roll = E.rollingAvg(vals, null, months, 3);
-    charts.ex = new Chart($('#c-expenses'), {
+    makeChart('c-expenses', {
       type: 'line',
       data: {
         labels: months.map(E.monthLabelIT),
@@ -1229,7 +1332,6 @@
   }
 
   function drawAllocation(months, showArchived) {
-    if (charts.al) { try { charts.al.destroy(); } catch (e) {} }
     const accs = (data.accounts || []).filter(a => showArchived || !a.archivedAt || true);
     const datasets = accs.map(a => ({
       label: a.name,
@@ -1239,7 +1341,7 @@
       }),
       borderColor: a.color, backgroundColor: a.color + '55', fill: true, tension: .2, pointRadius: 0,
     }));
-    charts.al = new Chart($('#c-alloc'), {
+    makeChart('c-alloc', {
       type: 'line',
       data: { labels: months.map(E.monthLabelIT), datasets },
       options: Object.assign(baseLineOpts(), { scales: { y: { stacked: true, ticks: { callback: v => fmt(v) } } } }),
@@ -1375,27 +1477,28 @@
       <div class="swr-row">SWR:
         ${[0.03, 0.035, 0.04].map(s => `<button class="chip ${s === f.swr ? 'active' : ''}" data-swr="${s}">${(s * 100).toFixed(1)}%</button>`).join('')}
       </div>`;
-    const fnCard = card('3.1 FIRE Number', fnBody);
-    grid.appendChild(fnCard);
+    grid.appendChild(card('3.1 FIRE Number', fnBody, INFO_FIRE.number));
     $$('[data-swr]', fnBody).forEach(b => b.onclick = () => { f.swr = parseFloat(b.dataset.swr); save(); render(); });
 
-    // 3.2 Coast FIRE — uses FIRE capital (investments), not total liquid.
+    // 3.2 Coast FIRE — crisp version. Uses FIRE capital, not total liquid.
     const today = currentMonth();
     const liquid = E.fireCapital(data, lastMonthWith(today)) || 0;
     const age = E.ageAt(data.settings.birthDate, today);
     const coastBase = E.coastFire(f, liquid, age, f.realReturnBase);
     const coastOpt = E.coastFire(f, liquid, age, f.realReturnOptimistic);
+    const coasting = liquid >= coastBase.requiredToday;
     const coastBody = el('div');
     coastBody.innerHTML = `
       ${fireCapitalCaption()}
-      <div class="muted small">Capitale FIRE attuale: ${fmt(liquid)} · età: ${age.toFixed(1)}</div>
-      <table class="mini"><tr><th></th><th>5%</th><th>7%</th></tr>
-        <tr><td>Coast number @ ${f.coastAge}</td><td>${fmt(coastBase.coastNumberAtCoastAge)}</td><td>${fmt(coastOpt.coastNumberAtCoastAge)}</td></tr>
-        <tr><td>Richiesto oggi</td><td>${fmt(coastBase.requiredToday)}</td><td>${fmt(coastOpt.requiredToday)}</td></tr>
-        <tr><td>Gap oggi</td><td>${fmt(coastBase.gapToday)}</td><td>${fmt(coastOpt.gapToday)}</td></tr>
-      </table>
-      <div class="note">Se smetti di contribuire oggi, raggiungi il FIRE number a ${coastBase.ageIfStopNow ? coastBase.ageIfStopNow.toFixed(1) : '—'} anni (5%) / ${coastOpt.ageIfStopNow ? coastOpt.ageIfStopNow.toFixed(1) : '—'} (7%).</div>`;
-    grid.appendChild(card('3.2 Coast FIRE', coastBody));
+      <div class="note ${coasting ? 'pos' : 'neg'}" style="font-size:15px">
+        ${coasting
+          ? `✓ <b>Sei in Coast FIRE.</b> Anche se smetti di versare oggi, il capitale cresce da solo fino al FIRE number entro i ${f.fireAge} anni.`
+          : `Non ancora in Coast FIRE: ti manca <b>${fmt(coastBase.gapToday)}</b> di capitale per poter smettere di versare e arrivarci comunque.`}
+      </div>
+      <div class="kpi"><span>Capitale FIRE oggi</span><b>${fmt(liquid)}</b></div>
+      <div class="kpi"><span>Capitale che basterebbe oggi (5% reale)</span><b>${fmt(coastBase.requiredToday)}</b></div>
+      <div class="kpi"><span>Se smetti di versare oggi, FIRE a</span><b>${coastBase.ageIfStopNow ? coastBase.ageIfStopNow.toFixed(0) + ' anni' : '—'} <span class="muted" style="font-weight:400">(a ${(f.realReturnOptimistic * 100).toFixed(0)}%: ${coastOpt.ageIfStopNow ? coastOpt.ageIfStopNow.toFixed(0) : '—'})</span></b></div>`;
+    grid.appendChild(card('3.2 Coast FIRE', coastBody, INFO_FIRE.coast));
 
     // 3.3 On-track
     grid.appendChild(onTrackCard());
@@ -1417,8 +1520,13 @@
     return !bd || bd === '1990-01-01' || bd === '1990-01-15';
   }
 
-  // Default monthly contribution = the user's actual rolling-12m invested pace.
+  // Default monthly contribution for projections = the MEDIAN monthly invested
+  // over the last 12 months. Median (not mean) so a couple of big one-off lump
+  // deposits don't inflate it into an impossible "I save €7.700/mo". Always an
+  // editable assumption, never a fixed truth.
   function actualMonthlyContribution() {
+    const med = E.medianInvested(data, 12);
+    if (med != null && med > 0) return Math.round(med);
     const v = E.trailingInvested(data, 12);
     return (v != null && v > 0) ? Math.round(v) : 2000;
   }
@@ -1452,8 +1560,8 @@
       <div class="note ${coasting ? 'pos' : ''}">${coasting
         ? '✓ Sei già in <b>Coast FIRE</b>: anche senza nuovi contributi arrivi al FIRE number entro i ' + f.fireAge + ' anni.'
         : 'Non ancora in Coast FIRE — gap di ' + fmt(coast.gapToday) + ' rispetto al capitale che basterebbe smettendo oggi.'}</div>
-      <div class="muted small">Proiezione al ritmo reale di risparmio: ${fmt(monthly)}/mese (media 12m) · rendimento ${(f.realReturnBase * 100).toFixed(1)}%.</div>`;
-    return card('🔥 A che punto sei', body);
+      <div class="muted small">Ipotesi: versi <b>${fmt(monthly)}/mese</b> (mediana 12m) con rendimento ${(f.realReturnBase * 100).toFixed(1)}%. Cambia l'importo nella card "Proiezione".</div>`;
+    return card('🔥 A che punto sei', body, INFO_FIRE.headline);
   }
 
   function personalReturnCard() {
@@ -1471,7 +1579,7 @@
       ? `<table class="mini"><tr><th>Anno</th><th>Rendimento</th><th>Mercato</th><th>Flussi netti</th></tr>${rows}</table>
          <div class="muted small">Simple Dietz sul capitale FIRE. Confronto con l'assunzione di ${(f.realReturnBase * 100).toFixed(1)}% (verde = sopra). Stima approssimata.</div>`
       : '<p class="muted small">Servono almeno due mesi di dati per stimare il rendimento.</p>';
-    return card('3.7 Rendimento personale', body);
+    return card('3.7 Rendimento personale', body, INFO_FIRE.personal);
   }
 
   function lastMonthWith(ym) {
@@ -1492,37 +1600,44 @@
     const body = el('div');
     const plans = data.plans || [];
     if (!plans.length) {
-      body.innerHTML = `<p class="muted">Nessun piano salvato.</p>`;
-      const b = el('button', 'btn', 'Crea baseline dal mese corrente');
+      body.innerHTML = `<div class="note">Nessun piano di riferimento salvato. Crea una <b>baseline</b> oggi: l'app congela una proiezione e da qui in poi ti dice se sei avanti o indietro.</div>`;
+      const b = el('button', 'btn primary', 'Salva baseline da oggi');
       b.onclick = rebaseline; body.appendChild(b);
-      return card('3.3 On-track check', body);
+      return card('3.3 Sei in linea col piano?', body, INFO_FIRE.ontrack);
     }
     const plan = plans[plans.length - 1];
     const months = E.monthSeries(data).filter(m => E.ymCompare(m, plan.createdAt) >= 0);
     const curve = E.planProjectionCurve(plan, months);
     const actual = months.map(m => E.fireCapital(data, m));
-    body.appendChild(canvas('c-ontrack'));
     const lastActual = actual[actual.length - 1], lastPlan = curve[months[months.length - 1]];
     const diff = (lastActual != null) ? E.r2(lastActual - lastPlan) : null;
-    body.appendChild(el('div', diff >= 0 ? 'note pos' : 'note neg',
-      diff == null ? 'Dati insufficienti' :
-        `Sei ${diff >= 0 ? 'avanti' : 'indietro'} di ${fmt(Math.abs(diff))} rispetto al piano salvato a ${E.monthLabelIT(plan.createdAt)}.`));
-    const b = el('button', 'btn small', 'Re-baseline'); b.onclick = rebaseline;
+    // translate the € gap into "months ahead/behind" at the plan's pace
+    const monthlyPace = plan.plannedMonthlyContribution || 1;
+    const monthsOff = diff != null ? Math.round(diff / monthlyPace) : null;
+    if (diff != null) {
+      const ahead = diff >= 0;
+      body.appendChild(el('div', ahead ? 'note pos' : 'note neg',
+        `<span style="font-size:16px"><b>${ahead ? 'Sei avanti' : 'Sei indietro'} di ${fmt(Math.abs(diff))}</b></span>` +
+        (monthsOff ? ` — circa <b>${Math.abs(monthsOff)} ${Math.abs(monthsOff) === 1 ? 'mese' : 'mesi'}</b> ${ahead ? "in anticipo" : "di ritardo"}` : '') +
+        ` rispetto al piano di ${E.monthLabelIT(plan.createdAt)}.`));
+    }
+    body.appendChild(canvas('c-ontrack'));
+    const b = el('button', 'btn small', 'Aggiorna baseline a oggi'); b.onclick = rebaseline;
     body.appendChild(b);
     setTimeout(() => {
       if (!$('#c-ontrack')) return;
-      charts.ot = new Chart($('#c-ontrack'), {
+      makeChart('c-ontrack', {
         type: 'line',
         data: {
           labels: months.map(E.monthLabelIT),
           datasets: [
-            { label: 'Reale', data: actual, borderColor: '#3498db', tension: .2, spanGaps: true },
+            { label: 'Reale', data: actual, borderColor: '#3498db', borderWidth: 2.5, tension: .2, spanGaps: true },
             { label: 'Piano', data: months.map(m => curve[m]), borderColor: '#95a5a6', borderDash: [5, 3], pointRadius: 0 },
           ],
         }, options: baseLineOpts(),
       });
     }, 0);
-    return card('3.3 On-track check', body);
+    return card('3.3 Sei in linea col piano?', body, INFO_FIRE.ontrack);
   }
   function rebaseline() {
     const today = lastMonthWith(currentMonth());
@@ -1547,11 +1662,13 @@
       start: E.fireCapital(data, lastMonthWith(today)) || 0,
       monthly: actualMonthlyContribution(), applyBox3: true,
     };
+    const med = E.medianInvested(data, 12), mean = E.trailingInvested(data, 12);
     const body = el('div');
     body.innerHTML = `
-      <div class="form-row"><label>Portafoglio attuale</label><input type="number" id="pj-start" value="${projState.start}"></div>
-      <div class="form-row"><label>Contributo mensile</label><input type="number" id="pj-monthly" value="${projState.monthly}"></div>
-      <label class="toggle"><input type="checkbox" id="pj-box3" ${projState.applyBox3 ? 'checked' : ''}> Applica Box 3 drag da ${f.box3StartDate}</label>
+      <div class="form-row"><label>Capitale FIRE attuale</label><input type="number" id="pj-start" value="${projState.start}"></div>
+      <div class="form-row"><label>Contributo mensile <span class="muted">(modificabile)</span></label><input type="number" id="pj-monthly" value="${projState.monthly}"></div>
+      ${med != null ? `<div class="muted small" style="margin:-2px 0 8px">Negli ultimi 12 mesi: mediana <b>${fmt(med)}</b>/mese${mean != null && Math.abs(mean - med) > 50 ? `, media ${fmt(mean)} (gonfiata dai versamenti una-tantom)` : ''}. È un'ipotesi: cambiala come vuoi.</div>` : ''}
+      <label class="toggle"><input type="checkbox" id="pj-box3" ${projState.applyBox3 ? 'checked' : ''}> Applica Box 3 (patrimoniale NL) da ${f.box3StartDate}</label>
       <div id="pj-out"></div>`;
     body.appendChild(canvas('c-proj'));
     const recompute = () => {
@@ -1572,9 +1689,8 @@
         `<div class="kpi"><span>FIRE (base 5%)</span><b>${base.reachedYear || '—'}</b></div>
          <div class="kpi"><span>FIRE (ottimistico 7%)</span><b>${opt.reachedYear || '—'}</b></div>
          ${projState.applyBox3 ? `<div class="muted small">Impatto Box 3 sul capitale finale: −${fmt(box3Impact)}</div>` : ''}`;
-      if (charts.pj) { try { charts.pj.destroy(); } catch (e) {} }
       const labels = base.series.filter((_, i) => i % 12 === 0).map(p => E.ymParts(p.ym).y);
-      charts.pj = new Chart($('#c-proj'), {
+      makeChart('c-proj', {
         type: 'line',
         data: {
           labels,
@@ -1591,7 +1707,7 @@
       $('#pj-box3').onchange = recompute;
       recompute();
     }, 0);
-    return card('3.4 Proiezione & Anni al FIRE', body);
+    return card('3.4 Proiezione & Anni al FIRE', body, INFO_FIRE.projection);
   }
 
   function monteCarloCard() {
@@ -1615,8 +1731,7 @@
         <div class="kpi"><span>Probabilità di successo</span><b>${fmtP(res.successProbability)}</b></div>
         <div class="kpi"><span>Età mediana al FIRE number</span><b>${res.medianCrossingAge ? res.medianCrossingAge.toFixed(1) : '—'}</b></div>
         <div class="kpi"><span>Capitale mediano finale</span><b>${fmt(res.medianFinal)}</b></div>`;
-      if (charts.mc) { try { charts.mc.destroy(); } catch (e) {} }
-      charts.mc = new Chart($('#c-mc'), {
+      makeChart('c-mc', {
         type: 'line',
         data: {
           labels: res.fan.map(p => p.age.toFixed(0)),
@@ -1630,7 +1745,7 @@
         }, options: baseLineOpts(),
       });
     };
-    return card('3.5 Monte Carlo', body);
+    return card('3.5 Monte Carlo', body, INFO_FIRE.montecarlo);
   }
 
   function whatIfCard() {
@@ -1671,7 +1786,7 @@
       ['wi-c', 'wi-r', 'wi-e', 'wi-oneoff'].forEach(id => $('#' + id).oninput = recompute);
       recompute();
     }, 0);
-    return card('3.6 Scenario rapido (what-if)', body);
+    return card('3.6 Scenario rapido (what-if)', body, INFO_FIRE.whatif);
   }
 
   /* ========================== TAB 4 — Pensioni ====================== */
