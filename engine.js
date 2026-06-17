@@ -663,6 +663,157 @@
     };
   }
 
+  /* ==================== FIRE Simulator engine (real €) ================
+     Deterministic, asset-class-level year-by-year projection to endAge.
+     Everything is in REAL (today's) euros: per-class returns are real, spend
+     and pension income are real. The AI layer never touches these numbers — it
+     only emits parameter changes that get fed back into these functions.
+
+     AssetClass: { id, name, value, realReturn, volatility, kind:'liquid'|'pension' }
+     FireProfile: {
+       currentAge, retirementAge, statePensionAge, endAge,
+       annualContribution, annualSpend, statePensionAnnual
+     }
+     ==================================================================== */
+
+  function fireClassTotals(classes) {
+    let liquid = 0, pension = 0;
+    (classes || []).forEach(c => {
+      const v = Number(c.value) || 0;
+      if (c.kind === 'pension') pension += v; else liquid += v;
+    });
+    return { liquid: r2(liquid), pension: r2(pension), total: r2(liquid + pension) };
+  }
+
+  // One deterministic path. Contributions are allocated to liquid classes by
+  // current weight; withdrawals are taken from liquid classes by weight.
+  // Pension pots grow but are never drawn (second pillar); from statePensionAge
+  // the state/annuity income (statePensionAnnual) reduces the withdrawal need.
+  function simulateFireDeterministic(profile, classes, overrideReturns) {
+    const p = profile;
+    let bal = (classes || []).map((c, i) => ({
+      kind: c.kind === 'pension' ? 'pension' : 'liquid',
+      ret: overrideReturns ? overrideReturns[i] : (Number(c.realReturn) || 0),
+      bal: Number(c.value) || 0,
+    }));
+    const years = [];
+    let depletedAge = null;
+    for (let age = p.currentAge; age <= p.endAge; age++) {
+      // 1) grow every class
+      bal.forEach(b => { b.bal = b.bal * (1 + b.ret); });
+      const phase = age < p.retirementAge ? 'accum' : 'decum';
+      let contribution = 0, withdrawal = 0, pensionIncome = 0;
+      const liquidIdx = bal.map((b, i) => b.kind === 'liquid' ? i : -1).filter(i => i >= 0);
+      const liquidSum = () => liquidIdx.reduce((s, i) => s + bal[i].bal, 0);
+
+      if (phase === 'accum') {
+        contribution = Math.max(0, Number(p.annualContribution) || 0);
+        const ls = liquidSum();
+        liquidIdx.forEach(i => {
+          const w = ls > 0 ? bal[i].bal / ls : 1 / liquidIdx.length;
+          bal[i].bal += contribution * w;
+        });
+      } else {
+        let need = Math.max(0, Number(p.annualSpend) || 0);
+        if (age >= p.statePensionAge) {
+          pensionIncome = Math.max(0, Number(p.statePensionAnnual) || 0);
+          need = Math.max(0, need - pensionIncome);
+        }
+        const ls = liquidSum();
+        withdrawal = Math.min(need, Math.max(0, ls));
+        if (ls > 0 && withdrawal > 0) {
+          liquidIdx.forEach(i => { bal[i].bal -= withdrawal * (bal[i].bal / ls); });
+        }
+        if (need > ls + 0.005 && depletedAge == null) depletedAge = age;
+      }
+
+      const liquidTotal = r2(liquidSum());
+      const pensionTotal = r2(bal.filter(b => b.kind === 'pension').reduce((s, b) => s + b.bal, 0));
+      years.push({
+        age, phase,
+        total: r2(liquidTotal + pensionTotal), liquidTotal, pensionTotal,
+        contribution: r2(contribution), withdrawal: r2(withdrawal), pensionIncome: r2(pensionIncome),
+        shortfall: phase === 'decum' ? r2(Math.max(0, (Number(p.annualSpend) || 0) - pensionIncome - withdrawal)) : 0,
+      });
+    }
+    return { years, depletedAge, success: depletedAge == null };
+  }
+
+  // Earliest age at which contributions could stop and the plan still survives
+  // to endAge (no liquid depletion during decumulation). null if even full
+  // contributions until retirement still deplete.
+  function coastFireAge(profile, classes) {
+    for (let stop = profile.currentAge; stop <= profile.retirementAge; stop++) {
+      if (simulateStopImpl(profile, classes, stop).success) return stop;
+    }
+    return null;
+  }
+  function simulateStopImpl(p, classes, stopAge) {
+    let bal = (classes || []).map(c => ({ kind: c.kind === 'pension' ? 'pension' : 'liquid', ret: Number(c.realReturn) || 0, bal: Number(c.value) || 0 }));
+    let depletedAge = null;
+    for (let age = p.currentAge; age <= p.endAge; age++) {
+      bal.forEach(b => { b.bal *= (1 + b.ret); });
+      const phase = age < p.retirementAge ? 'accum' : 'decum';
+      const liquidIdx = bal.map((b, i) => b.kind === 'liquid' ? i : -1).filter(i => i >= 0);
+      const ls = () => liquidIdx.reduce((s, i) => s + bal[i].bal, 0);
+      if (phase === 'accum') {
+        const contribution = age < stopAge ? Math.max(0, Number(p.annualContribution) || 0) : 0;
+        const s = ls();
+        liquidIdx.forEach(i => { const w = s > 0 ? bal[i].bal / s : 1 / liquidIdx.length; bal[i].bal += contribution * w; });
+      } else {
+        let need = Math.max(0, Number(p.annualSpend) || 0);
+        if (age >= p.statePensionAge) need = Math.max(0, need - (Number(p.statePensionAnnual) || 0));
+        const s = ls();
+        const wd = Math.min(need, Math.max(0, s));
+        if (s > 0 && wd > 0) liquidIdx.forEach(i => { bal[i].bal -= wd * (bal[i].bal / s); });
+        if (need > s + 0.005 && depletedAge == null) depletedAge = age;
+      }
+    }
+    return { depletedAge, success: depletedAge == null };
+  }
+
+  // Monte Carlo: each class draws an annual real return ~ N(realReturn, vol)
+  // per year. Success = liquid never depletes before endAge. Returns success
+  // probability and P10/P50/P90 bands of total net worth per age.
+  function monteCarloFire(profile, classes, runs, seed) {
+    runs = runs || 1000;
+    const rng = mulberry32((seed || 20260101) >>> 0);
+    const ages = [];
+    for (let age = profile.currentAge; age <= profile.endAge; age++) ages.push(age);
+    const totalsByAge = ages.map(() => []);
+    let successes = 0;
+    const depletionAges = [];
+
+    for (let run = 0; run < runs; run++) {
+      let bal = (classes || []).map(c => ({ kind: c.kind === 'pension' ? 'pension' : 'liquid', mean: Number(c.realReturn) || 0, sd: Number(c.volatility) || 0, bal: Number(c.value) || 0 }));
+      let depleted = null;
+      for (let ai = 0; ai < ages.length; ai++) {
+        const age = ages[ai];
+        bal.forEach(b => { const r = gaussian(b.mean, b.sd, rng); b.bal *= (1 + Math.max(-0.95, r)); });
+        const phase = age < profile.retirementAge ? 'accum' : 'decum';
+        const liquidIdx = bal.map((b, i) => b.kind === 'liquid' ? i : -1).filter(i => i >= 0);
+        const ls = () => liquidIdx.reduce((s, i) => s + bal[i].bal, 0);
+        if (phase === 'accum') {
+          const c = Math.max(0, Number(profile.annualContribution) || 0); const s = ls();
+          liquidIdx.forEach(i => { const w = s > 0 ? bal[i].bal / s : 1 / liquidIdx.length; bal[i].bal += c * w; });
+        } else {
+          let need = Math.max(0, Number(profile.annualSpend) || 0);
+          if (age >= profile.statePensionAge) need = Math.max(0, need - (Number(profile.statePensionAnnual) || 0));
+          const s = ls(); const wd = Math.min(need, Math.max(0, s));
+          if (s > 0 && wd > 0) liquidIdx.forEach(i => { bal[i].bal -= wd * (bal[i].bal / s); });
+          if (need > s + 0.005 && depleted == null) depleted = age;
+        }
+        totalsByAge[ai].push(bal.reduce((s, b) => s + b.bal, 0));
+      }
+      if (depleted == null) successes++; else depletionAges.push(depleted);
+    }
+    const pct = (arr, q) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.max(0, Math.round(q * (s.length - 1))))]; };
+    const bands = ages.map((age, i) => ({
+      age, p10: r2(pct(totalsByAge[i], 0.10)), p50: r2(pct(totalsByAge[i], 0.50)), p90: r2(pct(totalsByAge[i], 0.90)),
+    }));
+    return { runs, successProbability: successes / runs, bands, medianDepletionAge: pct(depletionAges, 0.5) };
+  }
+
   /* -------------------------- on-track (§3.3) -------------------------- */
 
   function planProjectionCurve(plan, months) {
@@ -698,5 +849,7 @@
     // §3
     annuityPV, fireNumberSimple, fireNumberTwoPhase, coastFire,
     project, monteCarlo, planProjectionCurve, mulberry32,
+    // FIRE simulator (asset-class, real €)
+    fireClassTotals, simulateFireDeterministic, coastFireAge, monteCarloFire,
   };
 });

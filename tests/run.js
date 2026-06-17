@@ -483,6 +483,61 @@ console.log('\n=== Scenario 9: ym helpers & table ===');
   });
 }
 
+/* =====================================================================
+   SCENARIO 10 — FIRE Simulator engine (deterministic conservation + MC)
+   ===================================================================== */
+console.log('\n=== Scenario 10: FIRE simulator engine ===');
+{
+  const classes = [
+    { id: 'eq', name: 'Eq', value: 100000, realReturn: 0, volatility: 0, kind: 'liquid' },
+    { id: 'pen', name: 'Pen', value: 50000, realReturn: 0, volatility: 0, kind: 'pension' },
+  ];
+  const profile = { currentAge: 40, retirementAge: 50, statePensionAge: 99, endAge: 60, annualContribution: 12000, annualSpend: 24000, statePensionAnnual: 0 };
+  const det = E.simulateFireDeterministic(profile, classes);
+
+  test('one row per year inclusive (40..60 = 21 rows)', () => assert.strictEqual(det.years.length, 21));
+  test('with zero returns, liquid follows prev + contribution − withdrawal exactly', () => {
+    for (let i = 1; i < det.years.length; i++) {
+      const prev = det.years[i - 1].liquidTotal, cur = det.years[i];
+      const expected = E.r2(prev + cur.contribution - cur.withdrawal);
+      approx(cur.liquidTotal, expected, 0.02, 'age ' + cur.age);
+    }
+  });
+  test('accumulation 10y of 12k on 100k (0% return) → 220k at retirement', () => {
+    approx(det.years.find(y => y.age === 49).liquidTotal, 220000, 0.5);
+  });
+  test('pension pot is never drawn (stays 50k at 0% return)', () => {
+    approx(det.years[det.years.length - 1].pensionTotal, 50000, 0.5);
+  });
+  test('depletes during decumulation (220k / 24k ≈ age 59)', () => {
+    assert.ok(det.depletedAge >= 58 && det.depletedAge <= 60, 'got ' + det.depletedAge);
+  });
+  test('state pension income reduces withdrawal need after statePensionAge', () => {
+    const p2 = Object.assign({}, profile, { statePensionAge: 55, statePensionAnnual: 24000, endAge: 70 });
+    const s2 = E.simulateFireDeterministic(p2, classes);
+    const row = s2.years.find(y => y.age === 60);
+    approx(row.withdrawal, 0, 0.02); // pension fully covers spend
+    assert.strictEqual(s2.depletedAge, null);
+  });
+  test('coastFireAge: rich plan can coast immediately, poor plan cannot', () => {
+    const rich = { currentAge: 40, retirementAge: 55, statePensionAge: 67, endAge: 90, annualContribution: 0, annualSpend: 1000, statePensionAnnual: 0 };
+    assert.strictEqual(E.coastFireAge(rich, [{ id: 'x', value: 2000000, realReturn: 0.04, volatility: 0, kind: 'liquid' }]), 40);
+    const poor = { currentAge: 40, retirementAge: 55, statePensionAge: 67, endAge: 90, annualContribution: 100, annualSpend: 80000, statePensionAnnual: 0 };
+    assert.strictEqual(E.coastFireAge(poor, [{ id: 'x', value: 1000, realReturn: 0.02, volatility: 0, kind: 'liquid' }]), null);
+  });
+  test('monteCarloFire: probability in [0,1], bands ordered p10≤p50≤p90, reproducible', () => {
+    const mc1 = E.monteCarloFire(profile, classes, 200, 123);
+    const mc2 = E.monteCarloFire(profile, classes, 200, 123);
+    assert.ok(mc1.successProbability >= 0 && mc1.successProbability <= 1);
+    approx(mc1.successProbability, mc2.successProbability, 0);
+    mc1.bands.forEach(b => { assert.ok(b.p10 <= b.p50 + 0.01 && b.p50 <= b.p90 + 0.01, 'age ' + b.age); });
+  });
+  test('fireClassTotals splits liquid vs pension', () => {
+    const t = E.fireClassTotals(classes);
+    approx(t.liquid, 100000); approx(t.pension, 50000); approx(t.total, 150000);
+  });
+}
+
 /* ------------------------------ summary ------------------------------ */
 console.log('\n' + '='.repeat(48));
 console.log(`  ${pass} passed, ${fail} failed`);

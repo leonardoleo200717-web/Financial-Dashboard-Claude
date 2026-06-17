@@ -177,6 +177,7 @@
     { id: 'andamento', label: 'Andamento', icon: '📈' },
     { id: 'storico', label: 'Storico', icon: '📋' },
     { id: 'fire', label: 'FIRE', icon: '🔥' },
+    { id: 'simulatore', label: 'Simulatore', icon: '🤖' },
     { id: 'pensioni', label: 'Pensioni', icon: '🏛️' },
     { id: 'impostazioni', label: 'Impostazioni', icon: '⚙️' },
   ];
@@ -194,7 +195,7 @@
     Object.values(charts).forEach(c => { try { c.destroy(); } catch (e) {} });
     charts = {}; chartCfg = {};
 
-    if (E.monthSeries(data).length === 0 && activeTab !== 'impostazioni') {
+    if (E.monthSeries(data).length === 0 && activeTab !== 'impostazioni' && activeTab !== 'simulatore') {
       main.appendChild(emptyState());
       return;
     }
@@ -202,6 +203,7 @@
       case 'andamento': renderAndamento(main); break;
       case 'storico': renderStorico(main); break;
       case 'fire': renderFire(main); break;
+      case 'simulatore': renderSimulatore(main); break;
       case 'pensioni': renderPensioni(main); break;
       case 'impostazioni': renderImpostazioni(main); break;
     }
@@ -1276,6 +1278,288 @@
   function doWipe() {
     const t = prompt('Digita CONFERMA per cancellare tutti i dati.');
     if (t === 'CONFERMA') { data = defaultData(); save(); render(); }
+  }
+
+  /* ===================== TAB — Simulatore FIRE (AI) =================== */
+  // Schema is extended additively: data.fireSim seeded lazily from existing
+  // accounts + FIRE settings the first time the tab is opened.
+  const FIRE_CLASS_DEFAULTS = [
+    { id: 'us_lc', name: 'Azionario USA large cap', realReturn: 0.05, volatility: 0.16, kind: 'liquid', w: 0.35 },
+    { id: 'eu', name: 'Azionario Europa', realReturn: 0.05, volatility: 0.17, kind: 'liquid', w: 0.20 },
+    { id: 'em', name: 'Mercati emergenti', realReturn: 0.055, volatility: 0.20, kind: 'liquid', w: 0.12 },
+    { id: 'scv', name: 'Small cap value', realReturn: 0.06, volatility: 0.19, kind: 'liquid', w: 0.08 },
+    { id: 'gov', name: 'Obblig. governative EU', realReturn: 0.005, volatility: 0.06, kind: 'liquid', w: 0.15 },
+    { id: 'corp', name: 'Obblig. corporate (scad. 2030)', realReturn: 0.015, volatility: 0.05, kind: 'liquid', w: 0.10 },
+    { id: 'cash', name: 'Liquidità', realReturn: 0, volatility: 0.01, kind: 'liquid', w: 0 },
+    { id: 'pen_nl', name: 'Pensione occupazionale NL', realReturn: 0.03, volatility: 0.08, kind: 'pension', w: 0 },
+    { id: 'pen_it', name: 'Pensione privata IT', realReturn: 0.025, volatility: 0.07, kind: 'pension', w: 0 },
+  ];
+
+  function ensureFireSim() {
+    if (data.fireSim && data.fireSim.classes) return;
+    const f = data.settings.fire;
+    const lastM = lastMonthWith(currentMonth());
+    const brokerTotal = E.fireCapital(data, lastM) || 0;
+    let cash = 0;
+    (data.accounts || []).forEach(a => {
+      if (a.type === 'savings' || a.type === 'current') {
+        const s = E.getSnapshot(data, a.id, lastM); if (s && s.balancePayday != null) cash += s.balancePayday;
+      }
+    });
+    const pensionTotal = E.lockedNetWorth(data, lastM) || 0;
+    const classes = FIRE_CLASS_DEFAULTS.map(c => {
+      let value = 0;
+      if (c.id === 'cash') value = E.r2(cash);
+      else if (c.id === 'pen_it') value = E.r2(pensionTotal);   // Generali is the IT pension in this ledger
+      else if (c.kind === 'liquid') value = E.r2(brokerTotal * c.w);
+      return { id: c.id, name: c.name, value, realReturn: c.realReturn, volatility: c.volatility, kind: c.kind };
+    });
+    const age = E.ageAt(data.settings.birthDate, currentMonth());
+    const med = E.medianInvested(data, 12);
+    data.fireSim = {
+      classes,
+      profile: {
+        currentAge: age != null ? Math.round(age) : 36,
+        retirementAge: f.fireAge || 55,
+        statePensionAge: 70,
+        endAge: 90,
+        annualContribution: med != null && med > 0 ? Math.round(med * 12) : 24000,
+        annualSpend: Math.round((f.monthlyExpenseFire || 2500) * 12),
+        statePensionAnnual: Math.round((f.expectedPensionMonthly || 0) * 12),
+      },
+    };
+    save();
+  }
+
+  /* ---- AI abstraction: in-artifact Anthropic endpoint, graceful local ---- */
+  const AI_MODELS = { parse: 'claude-sonnet-4-6', reason: 'claude-opus-4-8', review: 'claude-opus-4-8' };
+  let _aiState = 'unknown'; // 'unknown' | 'ok' | 'down'
+  async function callModel(role, { system, messages, tools }) {
+    const body = { model: AI_MODELS[role] || 'claude-sonnet-4-6', max_tokens: 1000, system, messages };
+    if (tools) body.tools = tools;
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    _aiState = 'ok';
+    return (j.content || []).map(b => b.text || '').join('');
+  }
+  function stripFences(s) { return String(s || '').replace(/```(?:json)?/gi, '').trim(); }
+  function safeJSON(s) { try { return JSON.parse(stripFences(s)); } catch (e) { return null; } }
+
+  let simScenario = null; // active what-if overlay (not persisted)
+
+  function renderSimulatore(main) {
+    ensureFireSim();
+    const fs = data.fireSim;
+
+    main.appendChild(el('div', 'note small disclaimer',
+      '⚠ Strumento di simulazione, <b>non consulenza finanziaria</b>. Tutti i numeri sono calcolati da un motore deterministico in euro reali (potere d\'acquisto di oggi); l\'AI può solo tradurre le tue frasi in parametri e commentare i numeri prodotti dal motore, non li inventa.'));
+
+    // ---- AI "what if" box ----
+    main.appendChild(whatIfBox(fs));
+
+    // ---- results (baseline + optional scenario overlay) ----
+    const baseRes = computeSim(fs.profile, fs.classes);
+    const scenRes = simScenario ? computeSim(simScenario.profile, simScenario.classes) : null;
+    main.appendChild(simResults(fs, baseRes, scenRes));
+
+    // ---- assumptions editor ----
+    main.appendChild(simEditor(fs));
+  }
+
+  function computeSim(profile, classes) {
+    const det = E.simulateFireDeterministic(profile, classes);
+    const coast = E.coastFireAge(profile, classes);
+    const mc = E.monteCarloFire(profile, classes, 1000, 20260101);
+    return { det, coast, mc, totals: E.fireClassTotals(classes) };
+  }
+
+  function whatIfBox(fs) {
+    const c = el('div', 'card');
+    c.appendChild(el('div', 'card-head', '<h3 class="card-title">🤖 "E se…" — scenario in linguaggio naturale</h3>'));
+    const ta = el('textarea', 'whatif-input'); ta.placeholder = 'Es: "vado in pensione a 53", "azioni al 4% reale", "+500/mese di contributi", "spesa 2.000/mese"';
+    ta.rows = 2;
+    const btn = el('button', 'btn primary', 'Simula');
+    const status = el('div', 'muted small'); status.style.marginTop = '6px';
+    const out = el('div', 'whatif-out');
+    c.appendChild(ta);
+    const bar = el('div', 'row'); bar.appendChild(btn);
+    const clearBtn = el('button', 'btn small', 'Azzera scenario'); clearBtn.onclick = () => { simScenario = null; render(); };
+    if (simScenario) bar.appendChild(clearBtn);
+    c.appendChild(bar); c.appendChild(status); c.appendChild(out);
+    // re-show the active scenario's summary after a re-render
+    if (simScenario && simScenario.intent) {
+      out.innerHTML = `<div class="note"><b>Scenario:</b> ${escapeHtml(simScenario.intent)}<br><span class="muted small">Assunzioni modificate: ${(simScenario.touched || []).map(escapeHtml).join(', ') || '—'}</span></div>
+        <div class="muted small">${simScenario.narration || ''}</div>`;
+    }
+
+    btn.onclick = async () => {
+      const text = ta.value.trim(); if (!text) return;
+      status.textContent = 'Interpreto la richiesta…'; btn.disabled = true;
+      let paramChanges = null, intent = text, touched = [];
+      try {
+        const sys = 'Converti una richiesta "what if" in modifiche di parametri per un simulatore FIRE. Rispondi SOLO con JSON, nessun testo, nessun fence. Schema: {"intent":string,"paramChanges":{...},"assumptionsTouched":[string],"explanationRequest":string}. Parametri ammessi in paramChanges: retirementAge, statePensionAge, endAge, annualContribution (€/anno), annualSpend (€/anno), statePensionAnnual (€/anno), classReturns (oggetto {classId: realReturn decimale}). classId disponibili: ' + fs.classes.map(c => c.id).join(', ') + '. NON calcolare risultati.';
+        const usr = 'Profilo attuale: ' + JSON.stringify(fs.profile) + '\nClassi: ' + JSON.stringify(fs.classes.map(c => ({ id: c.id, realReturn: c.realReturn }))) + '\nRichiesta: ' + text;
+        const raw = await callModel('parse', { system: sys, messages: [{ role: 'user', content: usr }] });
+        const j = safeJSON(raw);
+        if (j && j.paramChanges) { paramChanges = j.paramChanges; intent = j.intent || text; touched = j.assumptionsTouched || Object.keys(j.paramChanges); }
+        else throw new Error('parse');
+      } catch (e) {
+        _aiState = 'down';
+        status.innerHTML = '<span class="neg">AI non disponibile in locale</span> (l\'endpoint Anthropic richiede l\'ambiente Artifacts o un proxy). Modifica i parametri manualmente nella sezione "Ipotesi" qui sotto.';
+        btn.disabled = false; return;
+      }
+      // apply paramChanges to a COPY (deterministic), rerun, narrate engine numbers
+      const scen = applyParamChanges(fs, paramChanges);
+      const res = computeSim(scen.profile, scen.classes);
+      scen.intent = intent; scen.touched = touched; scen.narration = deterministicNarration(res);
+      simScenario = scen;
+      status.textContent = '';
+      btn.disabled = false;
+      render(); // redraw with overlay; whatIfBox re-shows the stored summary
+    };
+    return c;
+  }
+
+  function applyParamChanges(fs, pc) {
+    const profile = Object.assign({}, fs.profile);
+    const classes = fs.classes.map(c => Object.assign({}, c));
+    ['retirementAge', 'statePensionAge', 'endAge', 'annualContribution', 'annualSpend', 'statePensionAnnual'].forEach(k => {
+      if (pc[k] != null && isFinite(pc[k])) profile[k] = Number(pc[k]);
+    });
+    if (pc.classReturns && typeof pc.classReturns === 'object') {
+      classes.forEach(c => { if (pc.classReturns[c.id] != null && isFinite(pc.classReturns[c.id])) c.realReturn = Number(pc.classReturns[c.id]); });
+    }
+    return { profile, classes, changed: pc };
+  }
+
+  function deterministicNarration(res) {
+    const d = res.det;
+    const atRetire = d.years.find(y => y.phase === 'decum');
+    const survives = d.depletedAge == null;
+    return `Al pensionamento il capitale liquido è ${fmt(atRetire ? atRetire.liquidTotal : null)}. ` +
+      (survives ? `Il piano regge fino a ${res.det.years[res.det.years.length - 1].age} anni (nessun esaurimento). ` : `Il capitale liquido si esaurisce a ${d.depletedAge} anni. `) +
+      `Probabilità di successo Monte Carlo: ${(res.mc.successProbability * 100).toFixed(0)}%. ` +
+      (res.coast != null ? `Coast-FIRE: potresti smettere di versare a ${res.coast} anni.` : `Coast-FIRE non raggiunto con queste ipotesi.`);
+  }
+  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  function simResults(fs, base, scen) {
+    const wrap = el('div', 'grid');
+    // KPI card
+    const kpiBody = el('div');
+    const r = scen || base;
+    kpiBody.innerHTML = `
+      <div class="kpi"><span>Capitale oggi</span><b>${fmt(r.totals.total)}</b></div>
+      <div class="kpi"><span>Esito piano</span><b class="${r.det.success ? 'pos' : 'neg'}">${r.det.success ? 'Regge fino a ' + fs.profile.endAge : 'Esaurito a ' + r.det.depletedAge + ' anni'}</b></div>
+      <div class="kpi"><span>Coast-FIRE</span><b>${r.coast != null ? r.coast + ' anni' : '—'}</b></div>
+      <div class="kpi"><span>Successo Monte Carlo (1.000 run)</span><b>${(r.mc.successProbability * 100).toFixed(0)}%</b></div>
+      ${scen ? '<div class="note small">Stai vedendo lo <b>scenario</b> (linea piena) confrontato con la baseline (tratteggio).</div>' : ''}`;
+    wrap.appendChild(card(scen ? 'Risultati — scenario vs baseline' : 'Risultati', kpiBody, 'I numeri vengono dal motore deterministico in euro reali. La barra Monte Carlo simula 1.000 sequenze di rendimenti casuali per classe e conta in quante il capitale non si esaurisce prima di ' + fs.profile.endAge + ' anni.'));
+
+    wrap.appendChild(card('Patrimonio nel tempo (accumulo → decumulo)', canvas('c-sim-net'), 'Capitale totale anno per anno: cresce coi contributi fino al pensionamento, poi cala con i prelievi. Il segnale verticale è il pensionamento.'));
+    wrap.appendChild(card('Il gap ' + fs.profile.retirementAge + '→' + fs.profile.statePensionAge, canvas('c-sim-gap'), 'Nella fase di decumulo: quanto prelevi dal portafoglio (rosso) e quanta pensione statale arriva (verde) dall\'età della pensione. Nel "gap" prima della pensione vivi solo di portafoglio.'));
+    wrap.appendChild(card('Monte Carlo (ventaglio P10–P50–P90)', canvas('c-sim-mc'), 'Scenari da sfortunato (P10) a fortunato (P90). Se la banda bassa resta sopra zero a 90 anni, il piano è robusto.'));
+
+    // show-the-numbers
+    const tblWrap = el('div');
+    const toggle = el('button', 'btn small', 'Mostra i numeri');
+    const tbl = el('div'); tbl.style.display = 'none';
+    toggle.onclick = () => { tbl.style.display = tbl.style.display === 'none' ? 'block' : 'none'; toggle.textContent = tbl.style.display === 'none' ? 'Mostra i numeri' : 'Nascondi i numeri'; };
+    tbl.appendChild(numbersTable(r.det));
+    tblWrap.appendChild(toggle); tblWrap.appendChild(tbl);
+    wrap.appendChild(card('Tabella anno per anno', tblWrap, 'Ogni cifra dei grafici è verificabile qui: età, fase, contributo, prelievo, pensione, capitale liquido e totale.'));
+
+    setTimeout(() => drawSimCharts(fs, base, scen), 0);
+    return wrap;
+  }
+
+  function numbersTable(det) {
+    const t = el('table', 'data-table');
+    t.innerHTML = '<thead><tr><th>Età</th><th>Fase</th><th>Contributo</th><th>Prelievo</th><th>Pensione</th><th>Liquido</th><th>Totale</th></tr></thead>';
+    const tb = el('tbody');
+    det.years.forEach(y => {
+      const tr = el('tr');
+      tr.innerHTML = `<td>${y.age}</td><td>${y.phase === 'accum' ? 'accumulo' : 'decumulo'}</td><td>${y.contribution ? fmt(y.contribution) : '—'}</td><td>${y.withdrawal ? fmt(y.withdrawal) : '—'}</td><td>${y.pensionIncome ? fmt(y.pensionIncome) : '—'}</td><td>${fmt(y.liquidTotal)}</td><td>${fmt(y.total)}</td>`;
+      if (y.shortfall > 0) tr.classList.add('shortfall-row');
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    return t;
+  }
+
+  function drawSimCharts(fs, base, scen) {
+    const ages = base.det.years.map(y => y.age);
+    const retAge = fs.profile.retirementAge;
+    // net worth
+    const ds = [{ label: scen ? 'Baseline' : 'Patrimonio', data: base.det.years.map(y => y.total), borderColor: '#95a5a6', borderDash: scen ? [5, 3] : [], pointRadius: 0, tension: .15 }];
+    if (scen) ds.unshift({ label: 'Scenario', data: scen.det.years.map(y => y.total), borderColor: '#3498db', borderWidth: 2.5, pointRadius: 0, tension: .15 });
+    makeChart('c-sim-net', { type: 'line', data: { labels: ages, datasets: ds }, options: baseLineOpts() });
+    // gap (withdrawal vs pension income), scenario if present else base
+    const g = (scen || base).det.years;
+    makeChart('c-sim-gap', {
+      type: 'bar',
+      data: {
+        labels: g.map(y => y.age),
+        datasets: [
+          { label: 'Prelievo dal portafoglio', data: g.map(y => y.withdrawal), backgroundColor: 'rgba(231,76,60,.7)' },
+          { label: 'Pensione statale', data: g.map(y => y.pensionIncome), backgroundColor: 'rgba(46,204,113,.7)' },
+        ],
+      }, options: Object.assign(baseLineOpts(), { scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => fmt(v) } } } }),
+    });
+    // monte carlo fan
+    const mc = (scen || base).mc;
+    makeChart('c-sim-mc', {
+      type: 'line',
+      data: {
+        labels: mc.bands.map(b => b.age),
+        datasets: [
+          { label: 'P90', data: mc.bands.map(b => b.p90), borderColor: '#27ae60', pointRadius: 0, fill: false, tension: .15 },
+          { label: 'P50 (mediana)', data: mc.bands.map(b => b.p50), borderColor: '#3498db', pointRadius: 0, fill: false, tension: .15 },
+          { label: 'P10', data: mc.bands.map(b => b.p10), borderColor: '#e74c3c', pointRadius: 0, fill: false, tension: .15 },
+        ],
+      }, options: baseLineOpts(),
+    });
+  }
+
+  function simEditor(fs) {
+    const body = el('div');
+    const p = fs.profile;
+    const fields = [
+      ['currentAge', 'Età attuale'], ['retirementAge', 'Età pensionamento'], ['statePensionAge', 'Età pensione statale'],
+      ['endAge', 'Orizzonte (età)'], ['annualContribution', 'Contributo annuo (€)'], ['annualSpend', 'Spesa annua reale (€)'],
+      ['statePensionAnnual', 'Pensione statale annua (€)'],
+    ];
+    const pg = el('div', 'param-grid');
+    fields.forEach(([k, lab]) => {
+      const row = el('div', 'form-row');
+      row.innerHTML = `<label>${lab}</label><input type="number" step="any" data-pf="${k}" value="${p[k]}">`;
+      pg.appendChild(row);
+    });
+    body.appendChild(pg);
+    body.appendChild(el('h4', '', 'Classi di attività'));
+    const tbl = el('table', 'data-table');
+    tbl.innerHTML = '<thead><tr><th>Classe</th><th>Valore €</th><th>Rend. reale %</th><th>Volatilità %</th><th>Tipo</th></tr></thead>';
+    const tb = el('tbody');
+    fs.classes.forEach((c, i) => {
+      const tr = el('tr');
+      tr.innerHTML = `<td>${c.name}</td>
+        <td><input type="number" data-cl="${i}" data-clf="value" value="${c.value}" style="width:110px"></td>
+        <td><input type="number" step="0.001" data-cl="${i}" data-clf="realReturn" value="${c.realReturn}" style="width:80px"></td>
+        <td><input type="number" step="0.001" data-cl="${i}" data-clf="volatility" value="${c.volatility}" style="width:80px"></td>
+        <td>${c.kind === 'pension' ? 'pensione' : 'liquido'}</td>`;
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb); body.appendChild(tbl);
+    body.appendChild(el('div', 'muted small', 'Valori in euro reali. I rendimenti sono reali (al netto dell\'inflazione). Modifica e i grafici si aggiornano.'));
+
+    $$('[data-pf]', body).forEach(inp => inp.onchange = () => { p[inp.dataset.pf] = parseFloat(inp.value) || 0; save(); simScenario = null; render(); });
+    $$('[data-cl]', body).forEach(inp => inp.onchange = () => { fs.classes[+inp.dataset.cl][inp.dataset.clf] = parseFloat(inp.value) || 0; save(); simScenario = null; render(); });
+    return card('Ipotesi (modificabili)', body, 'Tutti i parametri del motore. Cambiali a mano oppure usa la casella "E se…" in alto: l\'AI traduce la frase in queste stesse modifiche.');
   }
 
   /* =========================== Entry form ============================ */
