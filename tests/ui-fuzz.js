@@ -67,7 +67,7 @@ function genData(rng, sid) {
   };
 }
 
-const tabs = ['andamento', 'storico', 'fire', 'pensioni', 'impostazioni'];
+const tabs = ['andamento', 'storico', 'fire', 'simulatore', 'pensioni', 'impostazioni'];
 let pass = 0, fail = 0;
 setTimeout(() => {
   console.log('\n=== UI fuzz: 30 random datasets × (5 tabs + entry form) ===');

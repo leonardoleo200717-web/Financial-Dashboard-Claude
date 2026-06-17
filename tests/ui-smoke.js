@@ -31,6 +31,8 @@ const dom = new JSDOM(html, {
     window.prompt = () => 'CONFERMA';
     window.alert = () => {};
     window.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+    // Simulate the local-file case where the Anthropic endpoint is unreachable.
+    window.fetch = () => Promise.reject(new Error('network blocked (local file)'));
     const origErr = window.console.error;
     window.console.error = (...a) => { errors.push(a.join(' ')); origErr.apply(window.console, a); };
     window.addEventListener('error', e => errors.push('window.error: ' + (e.error && e.error.stack || e.message)));
@@ -59,7 +61,7 @@ function run() {
     if (!months.includes('2026-03')) throw new Error('demo month 2026-03 missing');
   });
 
-  const tabs = ['andamento', 'storico', 'fire', 'pensioni', 'impostazioni'];
+  const tabs = ['andamento', 'storico', 'fire', 'simulatore', 'pensioni', 'impostazioni'];
   tabs.forEach(tab => {
     t('render tab: ' + tab, () => {
       window.FD.go(tab);
@@ -173,6 +175,34 @@ function run() {
     const accId = inp.dataset.snapPayday;
     const s = window.FD.data.snapshots[accId + '|2026-02'];
     if (!s || s.balancePayday !== 12345) throw new Error('balance not saved');
+  });
+
+  t('simulator tab seeds fireSim and renders charts + numbers table', () => {
+    window.FD.go('simulatore');
+    const d = window.FD.data;
+    if (!d.fireSim || !d.fireSim.classes || !d.fireSim.classes.length) throw new Error('fireSim not seeded');
+    if (!document.body.textContent.match(/Coast-FIRE/)) throw new Error('results missing');
+    if (!document.querySelector('canvas')) throw new Error('no sim charts');
+    if (!/non consulenza finanziaria/.test(document.body.textContent)) throw new Error('disclaimer missing');
+  });
+
+  t('simulator what-if degrades gracefully when AI endpoint unreachable', async () => {
+    window.FD.go('simulatore');
+    const ta = document.querySelector('.whatif-input');
+    const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Simula');
+    if (!ta || !btn) throw new Error('what-if controls missing');
+    ta.value = 'vado in pensione a 53';
+    btn.click();
+    await new Promise(r => setTimeout(r, 60)); // let the failed fetch reject
+    if (!/AI non disponibile/.test(document.body.textContent)) throw new Error('no graceful AI-down message');
+  });
+
+  t('simulator manual param edit updates the engine result', () => {
+    window.FD.go('simulatore');
+    const inp = document.querySelector('[data-pf="annualSpend"]');
+    if (!inp) throw new Error('no spend input');
+    inp.value = '120000'; inp.dispatchEvent(new window.Event('change'));
+    if (window.FD.data.fireSim.profile.annualSpend !== 120000) throw new Error('param not saved');
   });
 
   t('no console.error / uncaught errors during smoke', () => {
