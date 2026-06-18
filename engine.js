@@ -685,22 +685,41 @@
     return { liquid: r2(liquid), pension: r2(pension), total: r2(liquid + pension) };
   }
 
+  // Crisis / stress-test shock. profile.shock = {enabled, atAge, severity} where
+  // severity ~ the equity drawdown (e.g. 0.35). Each class is hit in proportion
+  // to its volatility (16% = equity reference), capped at −80%, so cash barely
+  // moves and high-vol classes fall more. Recovery is the normal compounding
+  // afterwards — which is exactly what makes a crash near retirement (sequence-
+  // of-returns risk) so much worse than one mid-career.
+  function fireShock(profile) {
+    const s = profile && profile.shock;
+    if (!s || !s.enabled || !(Number(s.severity) > 0)) return null;
+    return { atAge: Math.round(Number(s.atAge)), severity: Number(s.severity) };
+  }
+  function shockMult(vol, severity) {
+    const f = (Number(vol) || 0) / 0.16;
+    return Math.max(0.2, 1 - severity * f);
+  }
+
   // One deterministic path. Contributions are allocated to liquid classes by
   // current weight; withdrawals are taken from liquid classes by weight.
   // Pension pots grow but are never drawn (second pillar); from statePensionAge
   // the state/annuity income (statePensionAnnual) reduces the withdrawal need.
   function simulateFireDeterministic(profile, classes, overrideReturns) {
     const p = profile;
+    const shock = fireShock(p);
     let bal = (classes || []).map((c, i) => ({
       kind: c.kind === 'pension' ? 'pension' : 'liquid',
       ret: overrideReturns ? overrideReturns[i] : (Number(c.realReturn) || 0),
+      vol: Number(c.volatility) || 0,
       bal: Number(c.value) || 0,
     }));
     const years = [];
     let depletedAge = null;
     for (let age = p.currentAge; age <= p.endAge; age++) {
-      // 1) grow every class
+      // 1) grow every class, then apply a crisis shock in the shock year
       bal.forEach(b => { b.bal = b.bal * (1 + b.ret); });
+      if (shock && age === shock.atAge) bal.forEach(b => { b.bal *= shockMult(b.vol, shock.severity); });
       const phase = age < p.retirementAge ? 'accum' : 'decum';
       let contribution = 0, withdrawal = 0, pensionIncome = 0;
       const liquidIdx = bal.map((b, i) => b.kind === 'liquid' ? i : -1).filter(i => i >= 0);
@@ -749,10 +768,12 @@
     return null;
   }
   function simulateStopImpl(p, classes, stopAge) {
-    let bal = (classes || []).map(c => ({ kind: c.kind === 'pension' ? 'pension' : 'liquid', ret: Number(c.realReturn) || 0, bal: Number(c.value) || 0 }));
+    const shock = fireShock(p);
+    let bal = (classes || []).map(c => ({ kind: c.kind === 'pension' ? 'pension' : 'liquid', ret: Number(c.realReturn) || 0, vol: Number(c.volatility) || 0, bal: Number(c.value) || 0 }));
     let depletedAge = null;
     for (let age = p.currentAge; age <= p.endAge; age++) {
       bal.forEach(b => { b.bal *= (1 + b.ret); });
+      if (shock && age === shock.atAge) bal.forEach(b => { b.bal *= shockMult(b.vol, shock.severity); });
       const phase = age < p.retirementAge ? 'accum' : 'decum';
       const liquidIdx = bal.map((b, i) => b.kind === 'liquid' ? i : -1).filter(i => i >= 0);
       const ls = () => liquidIdx.reduce((s, i) => s + bal[i].bal, 0);
@@ -778,6 +799,7 @@
   function monteCarloFire(profile, classes, runs, seed) {
     runs = runs || 1000;
     const rng = mulberry32((seed || 20260101) >>> 0);
+    const shock = fireShock(profile);
     const ages = [];
     for (let age = profile.currentAge; age <= profile.endAge; age++) ages.push(age);
     const totalsByAge = ages.map(() => []);
@@ -790,6 +812,7 @@
       for (let ai = 0; ai < ages.length; ai++) {
         const age = ages[ai];
         bal.forEach(b => { const r = gaussian(b.mean, b.sd, rng); b.bal *= (1 + Math.max(-0.95, r)); });
+        if (shock && age === shock.atAge) bal.forEach(b => { b.bal *= shockMult(b.sd, shock.severity); });
         const phase = age < profile.retirementAge ? 'accum' : 'decum';
         const liquidIdx = bal.map((b, i) => b.kind === 'liquid' ? i : -1).filter(i => i >= 0);
         const ls = () => liquidIdx.reduce((s, i) => s + bal[i].bal, 0);

@@ -197,6 +197,18 @@ function run() {
     if (!/AI non disponibile/.test(document.body.textContent)) throw new Error('no graceful AI-down message');
   });
 
+  t('simulator stress test renders with-vs-without and toggles a persisted shock', () => {
+    window.FD.go('simulatore');
+    if (!/Stress test/.test(document.body.textContent)) throw new Error('stress card missing');
+    if (!document.querySelector('#sk-sev')) throw new Error('severity control missing');
+    if (!/senza crisi/i.test(document.body.textContent)) throw new Error('comparison missing');
+    const applyBtn = Array.from(document.querySelectorAll('button')).find(b => /crisi allo scenario|crisi dallo scenario/.test(b.textContent));
+    if (!applyBtn) throw new Error('apply button missing');
+    const before = window.FD.data.fireSim.profile.shock.enabled;
+    applyBtn.click();
+    if (window.FD.data.fireSim.profile.shock.enabled === before) throw new Error('shock not toggled/persisted');
+  });
+
   t('simulator manual param edit updates the engine result', () => {
     window.FD.go('simulatore');
     const inp = document.querySelector('[data-pf="annualSpend"]');

@@ -1328,6 +1328,7 @@
         annualContribution: med != null && med > 0 ? Math.round(med * 12) : 24000,
         annualSpend: Math.round((f.monthlyExpenseFire || 2500) * 12),
         statePensionAnnual: Math.round((f.expectedPensionMonthly || 0) * 12),
+        shock: { enabled: false, atAge: f.fireAge || 55, severity: 0.35 },
       },
     };
     save();
@@ -1373,8 +1374,66 @@
     const scenRes = simScenario ? computeSim(simScenario.profile, simScenario.classes) : null;
     main.appendChild(simResults(fs, baseRes, scenRes));
 
+    // ---- crisis stress test ----
+    main.appendChild(stressCard(fs));
+
     // ---- assumptions editor ----
     main.appendChild(simEditor(fs));
+  }
+
+  // Crisis stress test: compare the plan WITHOUT a crash vs WITH a one-off
+  // market crash at a chosen age. Shows sequence-of-returns risk explicitly.
+  function stressCard(fs) {
+    if (!fs.profile.shock) fs.profile.shock = { enabled: false, atAge: fs.profile.retirementAge, severity: 0.35 };
+    const sh = fs.profile.shock;
+    const body = el('div');
+    const ageInput = el('input'); ageInput.type = 'number'; ageInput.id = 'sk-age'; ageInput.value = sh.atAge; ageInput.style.maxWidth = '90px';
+    const sevInput = el('input'); sevInput.type = 'range'; sevInput.id = 'sk-sev'; sevInput.min = '0.1'; sevInput.max = '0.6'; sevInput.step = '0.05'; sevInput.value = sh.severity;
+    const sevLabel = el('b'); sevLabel.textContent = (sh.severity * 100).toFixed(0) + '%';
+    const r1 = el('div', 'form-row'); r1.appendChild(el('label', '', 'Età del crollo')); r1.appendChild(ageInput);
+    const r2 = el('div', 'form-row'); const l2 = el('label'); l2.append('Severità (calo azionario): '); l2.appendChild(sevLabel); r2.appendChild(l2); r2.appendChild(sevInput);
+    const outDiv = el('div');
+    const applyBtn = el('button', 'btn small', '');
+    body.appendChild(r1); body.appendChild(r2); body.appendChild(outDiv); body.appendChild(canvas('c-sim-stress')); body.appendChild(applyBtn);
+
+    function compute(drawChart) {
+      const atAge = parseFloat(ageInput.value) || fs.profile.retirementAge;
+      const severity = parseFloat(sevInput.value) || 0.35;
+      sevLabel.textContent = (severity * 100).toFixed(0) + '%';
+      const no = computeSim(Object.assign({}, fs.profile, { shock: { enabled: false } }), fs.classes);
+      const cr = computeSim(Object.assign({}, fs.profile, { shock: { enabled: true, atAge, severity } }), fs.classes);
+      const noFinal = no.det.years[no.det.years.length - 1].total;
+      const crFinal = cr.det.years[cr.det.years.length - 1].total;
+      const drop = noFinal > 0 ? (1 - crFinal / noFinal) : 0;
+      outDiv.innerHTML = `
+        <div class="kpi"><span>Capitale a ${fs.profile.endAge} — senza crisi</span><b>${fmt(noFinal)}</b></div>
+        <div class="kpi"><span>… con un crollo del ${(severity * 100).toFixed(0)}% a ${Math.round(atAge)} anni</span><b class="neg">${fmt(crFinal)} <span class="muted" style="font-weight:400">(−${(drop * 100).toFixed(0)}%)</span></b></div>
+        <div class="kpi"><span>Tiene fino a ${fs.profile.endAge}?</span><b>${no.det.success ? 'sì' : 'no'} → <span class="${cr.det.success ? '' : 'neg'}">${cr.det.success ? 'sì' : 'esaurito a ' + cr.det.depletedAge}</span></b></div>
+        <div class="kpi"><span>Successo Monte Carlo</span><b>${(no.mc.successProbability * 100).toFixed(0)}% → <span class="${cr.mc.successProbability < no.mc.successProbability ? 'neg' : ''}">${(cr.mc.successProbability * 100).toFixed(0)}%</span></b></div>
+        <div class="muted small">Un crollo vicino al pensionamento pesa molto più di uno a metà carriera (rischio di sequenza dei rendimenti): prova a spostare l'età.</div>`;
+      applyBtn.textContent = sh.enabled ? 'Togli la crisi dallo scenario principale' : 'Applica la crisi allo scenario principale';
+      if (drawChart) makeChart('c-sim-stress', {
+        type: 'line',
+        data: {
+          labels: no.det.years.map(y => y.age),
+          datasets: [
+            { label: 'Senza crisi', data: no.det.years.map(y => y.total), borderColor: '#95a5a6', borderDash: [5, 3], pointRadius: 0, tension: .15 },
+            { label: 'Con crollo ' + (severity * 100).toFixed(0) + '% @ ' + Math.round(atAge), data: cr.det.years.map(y => y.total), borderColor: '#e74c3c', borderWidth: 2.5, pointRadius: 0, tension: .15 },
+          ],
+        }, options: baseLineOpts(),
+      });
+    }
+    ageInput.onchange = () => compute(true);
+    sevInput.oninput = () => { sevLabel.textContent = (parseFloat(sevInput.value) * 100).toFixed(0) + '%'; };
+    sevInput.onchange = () => compute(true);
+    applyBtn.onclick = () => {
+      fs.profile.shock = { enabled: !sh.enabled, atAge: parseFloat(ageInput.value) || fs.profile.retirementAge, severity: parseFloat(sevInput.value) || 0.35 };
+      save(); simScenario = null; render();
+    };
+    compute(false);                       // synchronous KPI/text (chart needs DOM)
+    setTimeout(() => compute(true), 0);   // draw chart once canvas is in document
+    return card('🌪️ Stress test — crisi finanziaria', body,
+      'Simula un crollo di mercato una tantum a una certa età e lo confronta con lo scenario senza crisi. Il colpo è proporzionale alla volatilità di ogni classe (le azioni cadono più della liquidità), poi il recupero avviene con la normale crescita composta. "Applica" rende la crisi parte dello scenario principale (grafici e Monte Carlo qui sopra).');
   }
 
   function computeSim(profile, classes) {
@@ -1387,7 +1446,7 @@
   function whatIfBox(fs) {
     const c = el('div', 'card');
     c.appendChild(el('div', 'card-head', '<h3 class="card-title">🤖 "E se…" — scenario in linguaggio naturale</h3>'));
-    const ta = el('textarea', 'whatif-input'); ta.placeholder = 'Es: "vado in pensione a 53", "azioni al 4% reale", "+500/mese di contributi", "spesa 2.000/mese"';
+    const ta = el('textarea', 'whatif-input'); ta.placeholder = 'Es: "vado in pensione a 53", "azioni al 4% reale", "+500/mese di contributi", "crollo del 35% quando vado in pensione"';
     ta.rows = 2;
     const btn = el('button', 'btn primary', 'Simula');
     const status = el('div', 'muted small'); status.style.marginTop = '6px';
@@ -1408,7 +1467,7 @@
       status.textContent = 'Interpreto la richiesta…'; btn.disabled = true;
       let paramChanges = null, intent = text, touched = [];
       try {
-        const sys = 'Converti una richiesta "what if" in modifiche di parametri per un simulatore FIRE. Rispondi SOLO con JSON, nessun testo, nessun fence. Schema: {"intent":string,"paramChanges":{...},"assumptionsTouched":[string],"explanationRequest":string}. Parametri ammessi in paramChanges: retirementAge, statePensionAge, endAge, annualContribution (€/anno), annualSpend (€/anno), statePensionAnnual (€/anno), classReturns (oggetto {classId: realReturn decimale}). classId disponibili: ' + fs.classes.map(c => c.id).join(', ') + '. NON calcolare risultati.';
+        const sys = 'Converti una richiesta "what if" in modifiche di parametri per un simulatore FIRE. Rispondi SOLO con JSON, nessun testo, nessun fence. Schema: {"intent":string,"paramChanges":{...},"assumptionsTouched":[string],"explanationRequest":string}. Parametri ammessi in paramChanges: retirementAge, statePensionAge, endAge, annualContribution (€/anno), annualSpend (€/anno), statePensionAnnual (€/anno), classReturns (oggetto {classId: realReturn decimale}), shock (oggetto {enabled:true, atAge:int, severity:decimale 0-0.6} per simulare un crollo/crisi finanziaria a una certa età). classId disponibili: ' + fs.classes.map(c => c.id).join(', ') + '. NON calcolare risultati.';
         const usr = 'Profilo attuale: ' + JSON.stringify(fs.profile) + '\nClassi: ' + JSON.stringify(fs.classes.map(c => ({ id: c.id, realReturn: c.realReturn }))) + '\nRichiesta: ' + text;
         const raw = await callModel('parse', { system: sys, messages: [{ role: 'user', content: usr }] });
         const j = safeJSON(raw);
@@ -1439,6 +1498,13 @@
     });
     if (pc.classReturns && typeof pc.classReturns === 'object') {
       classes.forEach(c => { if (pc.classReturns[c.id] != null && isFinite(pc.classReturns[c.id])) c.realReturn = Number(pc.classReturns[c.id]); });
+    }
+    if (pc.shock && typeof pc.shock === 'object') {
+      profile.shock = {
+        enabled: pc.shock.enabled !== false,
+        atAge: pc.shock.atAge != null ? Number(pc.shock.atAge) : profile.retirementAge,
+        severity: pc.shock.severity != null ? Number(pc.shock.severity) : 0.35,
+      };
     }
     return { profile, classes, changed: pc };
   }
