@@ -61,7 +61,7 @@ function run() {
     if (!months.includes('2026-03')) throw new Error('demo month 2026-03 missing');
   });
 
-  const tabs = ['andamento', 'storico', 'fire', 'simulatore', 'pensioni', 'impostazioni'];
+  const tabs = ['andamento', 'storico', 'fire', 'simulatore', 'tasse', 'pensioni', 'impostazioni'];
   tabs.forEach(tab => {
     t('render tab: ' + tab, () => {
       window.FD.go(tab);
@@ -203,6 +203,28 @@ function run() {
     if (!inp) throw new Error('no spend input');
     inp.value = '120000'; inp.dispatchEvent(new window.Event('change'));
     if (window.FD.data.fireSim.profile.annualSpend !== 120000) throw new Error('param not saved');
+  });
+
+  t('tax tab renders deterministic facts + disclaimer', () => {
+    window.FD.go('tasse');
+    const txt = document.body.textContent;
+    if (!/Non è consulenza fiscale/.test(txt)) throw new Error('disclaimer missing');
+    if (!/30% ruling/.test(txt)) throw new Error('deterministic facts missing');
+    if (!document.querySelector('.whatif-input')) throw new Error('chat input missing');
+  });
+
+  t('tax ask degrades gracefully and renders all 3 agent layers', async () => {
+    window.FD.go('tasse');
+    const ta = document.querySelector('.whatif-input');
+    const btn = Array.from(document.querySelectorAll('button')).find(b => /Optimizer → Reviewer → Reconciler/.test(b.textContent));
+    if (!ta || !btn) throw new Error('tax controls missing');
+    ta.value = 'Conviene aumentare il lijfrente?';
+    btn.click();
+    await new Promise(r => setTimeout(r, 80)); // running -> error (fetch rejects)
+    const txt = document.body.textContent;
+    if (!/AI non disponibile/.test(txt)) throw new Error('no graceful AI-down message');
+    if (!/Optimizer/.test(txt) || !/Reviewer/.test(txt) || !/Reconciler/.test(txt)) throw new Error('three agent layers not all rendered');
+    if (!window.FD.data.taxAssist.history.length) throw new Error('history not persisted');
   });
 
   t('no console.error / uncaught errors during smoke', () => {

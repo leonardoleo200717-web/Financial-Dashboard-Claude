@@ -103,6 +103,17 @@
   .whatif-input { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; resize: vertical; margin-bottom: 8px; }
   .whatif-out { margin-top: 8px; }
   .shortfall-row td { background: #fdecea; }
+  .tax-turn { margin-bottom: 14px; }
+  .tax-q { font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .agent-layer { border-left: 3px solid var(--accent); padding: 6px 0 6px 12px; margin: 10px 0; }
+  .agent-head { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); margin-bottom: 6px; }
+  .agent-layer:nth-child(3) { border-left-color: #e67e22; } .agent-layer:nth-child(3) .agent-head { color: #e67e22; }
+  .agent-layer:nth-child(4) { border-left-color: #27ae60; } .agent-layer:nth-child(4) .agent-head { color: #27ae60; }
+  .proposal { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .proposal:last-child { border-bottom: 0; }
+  .warn-badge { background: #fdecea; color: #c0392b; }
+  .verify-list ul { margin: 6px 0 0; padding-left: 18px; }
+  .verify-list li { margin: 3px 0; }
   .big { font-size: 32px; font-weight: 700; }
   .headline-row { display: flex; gap: 28px; flex-wrap: wrap; margin-bottom: 14px; }
   .headline-row .big { font-size: 26px; }
@@ -1182,6 +1193,7 @@
     { id: 'storico', label: 'Storico', icon: '📋' },
     { id: 'fire', label: 'FIRE', icon: '🔥' },
     { id: 'simulatore', label: 'Simulatore', icon: '🤖' },
+    { id: 'tasse', label: 'Tasse', icon: '🧾' },
     { id: 'pensioni', label: 'Pensioni', icon: '🏛️' },
     { id: 'impostazioni', label: 'Impostazioni', icon: '⚙️' },
   ];
@@ -1199,7 +1211,7 @@
     Object.values(charts).forEach(c => { try { c.destroy(); } catch (e) {} });
     charts = {}; chartCfg = {};
 
-    if (E.monthSeries(data).length === 0 && activeTab !== 'impostazioni' && activeTab !== 'simulatore') {
+    if (E.monthSeries(data).length === 0 && activeTab !== 'impostazioni' && activeTab !== 'simulatore' && activeTab !== 'tasse') {
       main.appendChild(emptyState());
       return;
     }
@@ -1208,6 +1220,7 @@
       case 'storico': renderStorico(main); break;
       case 'fire': renderFire(main); break;
       case 'simulatore': renderSimulatore(main); break;
+      case 'tasse': renderTasse(main); break;
       case 'pensioni': renderPensioni(main); break;
       case 'impostazioni': renderImpostazioni(main); break;
     }
@@ -2336,7 +2349,11 @@
   }
 
   /* ---- AI abstraction: in-artifact Anthropic endpoint, graceful local ---- */
-  const AI_MODELS = { parse: 'claude-sonnet-4-6', reason: 'claude-opus-4-8', review: 'claude-opus-4-8' };
+  const AI_MODELS = {
+    parse: 'claude-sonnet-4-6', reason: 'claude-opus-4-8', review: 'claude-opus-4-8',
+    // tax ensemble — genuinely "more than one model": fast generator + strong reviewers
+    optimizer: 'claude-sonnet-4-6', reviewer: 'claude-opus-4-8', reconciler: 'claude-opus-4-8',
+  };
   let _aiState = 'unknown'; // 'unknown' | 'ok' | 'down'
   async function callModel(role, { system, messages, tools }) {
     const body = { model: AI_MODELS[role] || 'claude-sonnet-4-6', max_tokens: 1000, system, messages };
@@ -2564,6 +2581,155 @@
     $$('[data-pf]', body).forEach(inp => inp.onchange = () => { p[inp.dataset.pf] = parseFloat(inp.value) || 0; save(); simScenario = null; render(); });
     $$('[data-cl]', body).forEach(inp => inp.onchange = () => { fs.classes[+inp.dataset.cl][inp.dataset.clf] = parseFloat(inp.value) || 0; save(); simScenario = null; render(); });
     return card('Ipotesi (modificabili)', body, 'Tutti i parametri del motore. Cambiali a mano oppure usa la casella "E se…" in alto: l\'AI traduce la frase in queste stesse modifiche.');
+  }
+
+  /* ==================== TAB — Tax Assistant (3 agents) ================
+     Multi-agent ensemble over the Anthropic endpoint, each a distinct role:
+     Optimizer → Compliance/Risk Reviewer → Reconciler. Structured JSON hand-off
+     (proposals carry ids; the Reviewer addresses each by id; the Reconciler
+     ranks by id). The AI never does arithmetic — the deterministic facts panel
+     is computed in JS and passed to the agents as context. Per-tab history is
+     persisted. Degrades gracefully when the endpoint is unreachable (local file).
+     ==================================================================== */
+  const WEB_SEARCH_TOOL = { type: 'web_search_20250305', name: 'web_search', max_uses: 3 };
+  let taxWebSearch = true;
+
+  function ensureTaxAssist() {
+    if (!data.taxAssist) data.taxAssist = { history: [] };
+    if (!Array.isArray(data.taxAssist.history)) data.taxAssist.history = [];
+  }
+
+  // Deterministic tax facts (JS, never from the model) — also fed to the agents.
+  function taxFacts() {
+    const f = data.settings.fire;
+    const today = currentMonth();
+    const ruling = (data.settings.milestones || []).find(m => /30\s*%|ruling/i.test(m.label));
+    const rulingDate = ruling ? ruling.date : '2027-05';
+    const yr = today.slice(0, 4);
+    let lijf = 0;
+    E.monthSeries(data).filter(m => m.slice(0, 4) === yr).forEach(m => {
+      const e = E.getEntry(data, m);
+      (e && e.contributions || []).forEach(c => { const a = E.accountById(data, c.accountId); if (a && !E.isLiquid(a) && c.source === 'current') lijf += Number(c.amount) || 0; });
+    });
+    return {
+      rulingDate, monthsToRuling: E.monthsBetween(today, rulingDate),
+      box3StartDate: f.box3StartDate, box3DragAnnual: f.box3DragAnnual,
+      marginalRate: f.marginalRateBox1,
+      lijfThisYear: E.r2(lijf), lijfDeduction: E.r2(lijf * f.marginalRateBox1),
+      pensionExpectedMonthly: f.expectedPensionMonthly,
+    };
+  }
+
+  async function callAgent(role, { system, user, tools }) {
+    return await callModel(role, { system, messages: [{ role: 'user', content: user }], tools });
+  }
+
+  function taxContext(facts, question) {
+    return [
+      'PROFILO FISCALE (expat NL, cittadino IT). Fatti DETERMINISTICI (non ricalcolarli):',
+      `- 30% ruling: scadenza ${facts.rulingDate} (${facts.monthsToRuling} mesi). Valutare cosa cambia dopo.`,
+      `- Box 3 (tassazione patrimonio): drag ~${(facts.box3DragAnnual * 100).toFixed(2)}%/anno da ${facts.box3StartDate}. Sistema in evoluzione legale: SENSIBILE ALLA DATA.`,
+      `- Regime parziale non residente (Art. 2.6): SENSIBILE ALLA DATA — abrogato per il futuro con regole transitorie; verificare, non assumere.`,
+      `- Lijfrente (Meesman): deferral Box 1 + spazio deducibile. Contributi personali quest'anno: ${E.fmtEUR(facts.lijfThisYear)} → deduzione stimata ${E.fmtEUR(facts.lijfDeduction)} (aliquota ${(facts.marginalRate * 100).toFixed(0)}%).`,
+      `- Pensione privata IT: interazione cross-border con NL.`,
+      `Aliquota marginale Box 1 assunta: ${(facts.marginalRate * 100).toFixed(0)}%.`,
+      `DOMANDA UTENTE: ${question}`,
+    ].join('\n');
+  }
+
+  const OPT_SYS = 'Sei l\'OPTIMIZER di un ensemble fiscale per un expat NL/cittadino IT. Proponi mosse concrete di ottimizzazione fiscale calibrate sul profilo. NON dare consulenza definitiva e NON fare affermazioni categoriche sulla legge vigente. Rispondi SOLO con JSON valido (niente prosa, niente ```): {"proposals":[{"id":"p1","title":"...","rationale":"...","assumptions":["..."],"recencySensitive":true|false}]}. Massimo 5 proposte.';
+  const REV_SYS = 'Sei il COMPLIANCE/RISK REVIEWER. Per OGNI proposta (riferendoti al suo id) valuta: legalità, solidità delle assunzioni, dipendenza dalla legge olandese vigente, ed elementi SENSIBILI ALLA DATA (30% ruling, Art. 2.6, Box 3). Se disponibile, usa web_search per regole attuali. Rispondi SOLO JSON: {"reviews":[{"id":"p1","verdict":"ok|cautela|rischioso","risks":["..."],"recencyFlags":["..."],"confidence":0.0}]}.';
+  const REC_SYS = 'Sei il RECONCILER. Sintetizza proposte e revisioni in una raccomandazione bilanciata e ORDINATA per priorità, con confidenza per azione. Mostra l\'equilibrio, non una sola risposta sicura. Rispondi SOLO JSON: {"ranked":[{"id":"p1","action":"...","confidence":0.0,"why":"..."}],"verify":["verifica con il Belastingdienst ...","consulta un commercialista/adviser ..."]}. La lista "verify" è obbligatoria.';
+
+  async function askTax(question) {
+    ensureTaxAssist();
+    const facts = taxFacts();
+    const turn = { q: question, ts: Date.now(), status: 'running', proposals: null, reviews: null, reconciliation: null };
+    data.taxAssist.history.unshift(turn); save(); render();
+    try {
+      const ctx = taxContext(facts, question);
+      const optRaw = await callAgent('optimizer', { system: OPT_SYS, user: ctx });
+      const opt = safeJSON(optRaw); turn.proposals = (opt && opt.proposals) || [];
+      const revRaw = await callAgent('reviewer', { system: REV_SYS, user: ctx + '\n\nPROPOSTE DA RIVEDERE:\n' + JSON.stringify(turn.proposals), tools: taxWebSearch ? [WEB_SEARCH_TOOL] : null });
+      const rev = safeJSON(revRaw); turn.reviews = (rev && rev.reviews) || [];
+      const recRaw = await callAgent('reconciler', { system: REC_SYS, user: ctx + '\n\nPROPOSTE:\n' + JSON.stringify(turn.proposals) + '\n\nREVISIONI:\n' + JSON.stringify(turn.reviews) });
+      const rec = safeJSON(recRaw); turn.reconciliation = rec || null;
+      turn.status = 'done';
+    } catch (e) {
+      turn.status = 'error';
+      turn.error = 'AI non disponibile in locale: l\'endpoint Anthropic non è raggiungibile da un file aperto nel browser. Le tre fasi (Optimizer → Reviewer → Reconciler) vengono eseguite dove l\'endpoint è attivo (es. Claude Artifacts).';
+    }
+    save(); render();
+  }
+
+  function renderTasse(main) {
+    ensureTaxAssist();
+    const facts = taxFacts();
+
+    main.appendChild(el('div', 'note small disclaimer',
+      '⚠ <b>Non è consulenza fiscale.</b> Gli agenti non fanno affermazioni categoriche sulla legge vigente e segnalano gli elementi sensibili alla data. La raccomandazione finale termina sempre con una lista di verifiche da fare con un professionista / il Belastingdienst. I numeri mostrati sono calcolati in JS, non dall\'AI.'));
+
+    // deterministic facts panel
+    const fb = el('div');
+    fb.innerHTML = `
+      <div class="kpi"><span>30% ruling — scadenza</span><b>${facts.rulingDate} <span class="muted" style="font-weight:400">(${facts.monthsToRuling} mesi)</span></b></div>
+      <div class="kpi"><span>Box 3 — drag da</span><b>${facts.box3StartDate} · ~${(facts.box3DragAnnual * 100).toFixed(2)}%/anno</b></div>
+      <div class="kpi"><span>Lijfrente personale ${currentMonth().slice(0, 4)}</span><b>${fmt(facts.lijfThisYear)}</b></div>
+      <div class="kpi"><span>Deduzione Box 1 stimata</span><b>${fmt(facts.lijfDeduction)} <span class="muted" style="font-weight:400">(@ ${(facts.marginalRate * 100).toFixed(0)}%)</span></b></div>
+      <div class="muted small">Elementi sensibili alla data: 30% ruling, regime Art. 2.6 (parziale non residente), Box 3 — verificare le regole attuali.</div>`;
+    main.appendChild(card('Contesto fiscale (deterministico)', fb, 'Questi valori sono calcolati dall\'app dai tuoi dati/impostazioni e passati agli agenti come contesto. L\'AI non li ricalcola.'));
+
+    // chat input
+    const chat = el('div', 'card');
+    chat.appendChild(el('div', 'card-head', '<h3 class="card-title">Chiedi ai 3 agenti</h3>'));
+    const ta = el('textarea', 'whatif-input'); ta.rows = 2;
+    ta.placeholder = 'Es: "Conviene aumentare i contributi lijfrente prima della scadenza del 30% ruling?" · "Cosa cambia per il Box 3 dopo il 2027?"';
+    chat.appendChild(ta);
+    const bar = el('div', 'row');
+    const ask = el('button', 'btn primary', 'Analizza (Optimizer → Reviewer → Reconciler)');
+    ask.onclick = () => { const q = ta.value.trim(); if (q) askTax(q); };
+    const ws = el('label', 'toggle small', `<input type="checkbox" id="tax-ws" ${taxWebSearch ? 'checked' : ''}> web_search sul Reviewer`);
+    bar.appendChild(ask); bar.appendChild(ws);
+    chat.appendChild(bar);
+    main.appendChild(chat);
+    const wsCb = $('#tax-ws', chat); if (wsCb) wsCb.onchange = () => { taxWebSearch = wsCb.checked; };
+
+    // history (newest first)
+    (data.taxAssist.history || []).forEach(turn => main.appendChild(renderTaxTurn(turn)));
+  }
+
+  function renderTaxTurn(turn) {
+    const c = el('div', 'card tax-turn');
+    c.appendChild(el('div', 'tax-q', '🗨️ ' + escapeHtml(turn.q)));
+    if (turn.status === 'running') { c.appendChild(el('div', 'muted small', 'Gli agenti stanno lavorando…')); return c; }
+    if (turn.status === 'error') { c.appendChild(el('div', 'note neg', turn.error)); }
+
+    // Layer 1 — Optimizer
+    c.appendChild(agentLayer('1 · Optimizer', 'proposte', (turn.proposals || []).length
+      ? (turn.proposals || []).map(p => `<div class="proposal"><b>${escapeHtml(p.title || p.id)}</b> ${p.recencySensitive ? '<span class="badge warn-badge">sensibile alla data</span>' : ''}<div class="muted small">${escapeHtml(p.rationale || '')}</div>${(p.assumptions || []).length ? `<div class="muted small">Assunzioni: ${(p.assumptions || []).map(escapeHtml).join('; ')}</div>` : ''}<div class="muted small">id: ${escapeHtml(p.id || '')}</div></div>`).join('')
+      : '<span class="muted small">—</span>'));
+
+    // Layer 2 — Reviewer (addresses each proposal by id)
+    c.appendChild(agentLayer('2 · Compliance / Risk Reviewer', 'revisione', (turn.reviews || []).length
+      ? (turn.reviews || []).map(r => {
+        const cls = r.verdict === 'rischioso' ? 'neg' : r.verdict === 'ok' ? 'pos' : '';
+        return `<div class="proposal"><b>${escapeHtml(r.id || '')}</b> <span class="${cls}">${escapeHtml(r.verdict || '')}</span>${r.confidence != null ? ` <span class="muted small">conf. ${(Number(r.confidence) * 100).toFixed(0)}%</span>` : ''}${(r.risks || []).length ? `<div class="muted small">Rischi: ${(r.risks || []).map(escapeHtml).join('; ')}</div>` : ''}${(r.recencyFlags || []).length ? `<div class="warn small">⚠ Recency: ${(r.recencyFlags || []).map(escapeHtml).join('; ')}</div>` : ''}</div>`;
+      }).join('')
+      : '<span class="muted small">—</span>'));
+
+    // Layer 3 — Reconciler (ranked + verify list)
+    const rec = turn.reconciliation;
+    c.appendChild(agentLayer('3 · Reconciler', 'raccomandazione', rec
+      ? `${(rec.ranked || []).map((a, i) => `<div class="proposal"><b>${i + 1}. ${escapeHtml(a.action || a.id || '')}</b>${a.confidence != null ? ` <span class="muted small">conf. ${(Number(a.confidence) * 100).toFixed(0)}%</span>` : ''}<div class="muted small">${escapeHtml(a.why || '')}</div></div>`).join('')}
+         <div class="note verify-list"><b>Verifica con un professionista:</b><ul>${(rec.verify || ['Verifica gli elementi sensibili alla data con il Belastingdienst o un commercialista.']).map(v => `<li>${escapeHtml(v)}</li>`).join('')}</ul></div>`
+      : '<span class="muted small">—</span>'));
+    return c;
+  }
+
+  function agentLayer(title, kind, innerHtml) {
+    const d = el('div', 'agent-layer');
+    d.innerHTML = `<div class="agent-head">${title}</div><div class="agent-body">${innerHtml}</div>`;
+    return d;
   }
 
   /* =========================== Entry form ============================ */
