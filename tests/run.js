@@ -536,6 +536,44 @@ console.log('\n=== Scenario 10: FIRE simulator engine ===');
     const t = E.fireClassTotals(classes);
     approx(t.liquid, 100000); approx(t.pension, 50000); approx(t.total, 150000);
   });
+
+  // crisis stress-test shock
+  const sclasses = [
+    { id: 'eq', name: 'Eq', value: 200000, realReturn: 0.05, volatility: 0.16, kind: 'liquid' },
+    { id: 'cash', name: 'Cash', value: 30000, realReturn: 0, volatility: 0.01, kind: 'liquid' },
+  ];
+  const sbase = { currentAge: 36, retirementAge: 55, statePensionAge: 70, endAge: 90, annualContribution: 24000, annualSpend: 30000, statePensionAnnual: 12000 };
+  const withShock = (atAge, sev) => Object.assign({}, sbase, { shock: { enabled: true, atAge, severity: sev } });
+  test('shock disabled / severity 0 is a no-op', () => {
+    const a = E.simulateFireDeterministic(sbase, sclasses).years.at(-1).total;
+    const b = E.simulateFireDeterministic(withShock(55, 0), sclasses).years.at(-1).total;
+    approx(a, b, 0.01);
+  });
+  test('a crisis shock reduces final capital', () => {
+    const base = E.simulateFireDeterministic(sbase, sclasses).years.at(-1).total;
+    const crash = E.simulateFireDeterministic(withShock(55, 0.35), sclasses).years.at(-1).total;
+    assert.ok(crash < base, `crash ${crash} should be < base ${base}`);
+  });
+  test('shock hits high-vol classes harder than cash (vol-scaled)', () => {
+    // a pure-cash portfolio barely moves; a pure-equity one drops ~severity
+    const eqOnly = [{ id: 'e', value: 100000, realReturn: 0, volatility: 0.16, kind: 'liquid' }];
+    const cashOnly = [{ id: 'c', value: 100000, realReturn: 0, volatility: 0.01, kind: 'liquid' }];
+    const p = { currentAge: 60, retirementAge: 90, statePensionAge: 99, endAge: 61, annualContribution: 0, annualSpend: 0, statePensionAnnual: 0, shock: { enabled: true, atAge: 60, severity: 0.4 } };
+    const eq = E.simulateFireDeterministic(p, eqOnly).years.find(y => y.age === 60).total;
+    const cash = E.simulateFireDeterministic(p, cashOnly).years.find(y => y.age === 60).total;
+    approx(eq, 60000, 1);   // 100k × (1 − 0.4)
+    assert.ok(cash > 97000, 'cash barely moves, got ' + cash);
+  });
+  test('sequence risk: a crash near retirement is worse than one mid-career', () => {
+    const early = E.simulateFireDeterministic(withShock(40, 0.35), sclasses).years.at(-1).total;
+    const late = E.simulateFireDeterministic(withShock(55, 0.35), sclasses).years.at(-1).total;
+    assert.ok(early > late, `early-crash ${early} should leave more than late-crash ${late}`);
+  });
+  test('Monte Carlo success drops (or holds) with an added crash', () => {
+    const a = E.monteCarloFire(sbase, sclasses, 400, 42).successProbability;
+    const b = E.monteCarloFire(withShock(55, 0.35), sclasses, 400, 42).successProbability;
+    assert.ok(b <= a + 1e-9, `with-crash ${b} should be ≤ baseline ${a}`);
+  });
 }
 
 /* ------------------------------ summary ------------------------------ */
