@@ -47,6 +47,10 @@
           { id: uuid(), date: '2027-05', label: 'Scadenza 30% ruling + Box 3', note: null },
           { id: uuid(), date: '2030-12', label: 'iBonds Dec 2030 maturity — riallocare', note: null },
         ],
+        // AI provider config (local only). 'artifact' = keyless in-artifact
+        // endpoint; otherwise an Anthropic key or any OpenAI-compatible API
+        // (DeepSeek, OpenAI, Groq, OpenRouter, local Ollama/LM Studio).
+        ai: { provider: 'artifact', baseUrl: '', apiKey: '', model: '' },
       },
     };
   }
@@ -92,6 +96,7 @@
     d.plans = d.plans || [];
     d.settings = Object.assign(base.settings, d.settings || {});
     d.settings.fire = Object.assign(base.settings.fire, (d.settings && d.settings.fire) || {});
+    d.settings.ai = Object.assign(base.settings.ai, (d.settings && d.settings.ai) || {});
     return d;
   }
 
@@ -1151,6 +1156,50 @@
     const wipeBtn = el('button', 'btn neg', 'Cancella tutto'); wipeBtn.onclick = doWipe;
     [expBtn, impBtn, mergeBtn, impInput, demoBtn, wipeBtn].forEach(b => dataBody.appendChild(b));
     main.appendChild(card('Dati', dataBody));
+
+    // ---- AI / Modelli ----
+    main.appendChild(aiSettingsCard());
+  }
+
+  function aiSettingsCard() {
+    const ai = data.settings.ai || (data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' });
+    const body = el('div');
+    const opts = Object.keys(AI_PRESETS).map(k => `<option value="${k}" ${ai.provider === k ? 'selected' : ''}>${AI_PRESETS[k].label}</option>`).join('');
+    body.innerHTML = `
+      <div class="form-row"><label>Provider</label><select id="ai-prov">${opts}</select></div>
+      <div class="form-row"><label>Endpoint (Base URL)</label><input id="ai-url" value="${ai.baseUrl || ''}" placeholder="(preset)"></div>
+      <div class="form-row"><label>Modello</label><input id="ai-model" value="${ai.model || ''}" placeholder="(preset)"></div>
+      <div class="form-row"><label>Chiave API</label><input id="ai-key" type="password" value="${ai.apiKey || ''}" placeholder="solo nel tuo browser" autocomplete="off"></div>
+      <div class="row"><button class="btn small" id="ai-test">Prova connessione</button><span id="ai-status" class="muted small"></span></div>
+      <div class="muted small" style="margin-top:8px">La chiave resta <b>solo in questo browser</b> (localStorage), mai nel codice. Esempi senza chiave: <b>Artifacts</b> o <b>Ollama</b> locale. OpenAI-compatible copre DeepSeek, OpenAI, Groq, OpenRouter, LM Studio. La chiamata diretta dal browser espone la chiave sul tuo PC: non condividere il file.</div>`;
+    const sync = () => {
+      ai.provider = $('#ai-prov', body).value;
+      ai.baseUrl = $('#ai-url', body).value.trim();
+      ai.model = $('#ai-model', body).value.trim();
+      ai.apiKey = $('#ai-key', body).value.trim();
+      save();
+    };
+    // prefill placeholders from preset when provider changes
+    $('#ai-prov', body).onchange = () => {
+      const p = AI_PRESETS[$('#ai-prov', body).value];
+      if (p) { $('#ai-url', body).value = p.baseUrl; $('#ai-model', body).value = p.model; }
+      sync();
+    };
+    ['ai-url', 'ai-model', 'ai-key'].forEach(id => $('#' + id, body).onchange = sync);
+    $('#ai-test', body).onclick = async () => {
+      sync();
+      const st = $('#ai-status', body); st.textContent = 'Provo…'; st.className = 'muted small';
+      try {
+        const out = await callModel('parse', { system: 'Reply with the single word OK.', messages: [{ role: 'user', content: 'ping' }] });
+        st.textContent = '✓ Connessione riuscita' + (out ? ' (' + out.slice(0, 24).replace(/\s+/g, ' ') + '…)' : '');
+        st.className = 'pos small';
+      } catch (e) {
+        st.textContent = '✗ Non raggiungibile: ' + e.message + (aiCfg().provider === 'artifact' ? ' — da file locale serve una chiave o Ollama.' : '');
+        st.className = 'neg small';
+      }
+    };
+    return card('AI / Modelli', body,
+      'Scegli dove gira l\'AI dei tab Simulatore e Tasse. <b>Artifacts</b>: senza chiave, solo dentro claude.ai. <b>Anthropic/OpenAI/DeepSeek/Groq/OpenRouter</b>: incolla la tua chiave. <b>Ollama</b>: modello locale sul tuo PC, senza chiave. Il motore deterministico funziona comunque, con o senza AI.');
   }
 
   function bindAccountActions(root) {
@@ -1334,25 +1383,75 @@
     save();
   }
 
-  /* ---- AI abstraction: in-artifact Anthropic endpoint, graceful local ---- */
+  /* ---- AI abstraction: provider-agnostic, graceful fallback ----
+     Providers:
+       'artifact'  → keyless in-artifact Anthropic endpoint (default; works in
+                     Claude Artifacts, unreachable from a plain local file)
+       'anthropic' → Anthropic Messages API with your x-api-key
+       'openai'    → any OpenAI-compatible /chat/completions API: OpenAI,
+                     DeepSeek, Groq, OpenRouter, Together, local Ollama/LM Studio
+     Role→model map is used only when no explicit model is configured. */
   const AI_MODELS = {
     parse: 'claude-sonnet-4-6', reason: 'claude-opus-4-8', review: 'claude-opus-4-8',
-    // tax ensemble — genuinely "more than one model": fast generator + strong reviewers
     optimizer: 'claude-sonnet-4-6', reviewer: 'claude-opus-4-8', reconciler: 'claude-opus-4-8',
   };
+  const AI_PRESETS = {
+    artifact:  { label: 'Claude Artifacts (senza chiave)', shape: 'anthropic', baseUrl: 'https://api.anthropic.com', model: '' },
+    anthropic: { label: 'Anthropic (chiave)', shape: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' },
+    openai:    { label: 'OpenAI', shape: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+    deepseek:  { label: 'DeepSeek', shape: 'openai', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+    groq:      { label: 'Groq', shape: 'openai', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+    openrouter:{ label: 'OpenRouter', shape: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-chat' },
+    ollama:    { label: 'Ollama (locale, senza chiave)', shape: 'openai', baseUrl: 'http://localhost:11434/v1', model: 'llama3.1' },
+    custom:    { label: 'Personalizzato (OpenAI-compatible)', shape: 'openai', baseUrl: '', model: '' },
+  };
   let _aiState = 'unknown'; // 'unknown' | 'ok' | 'down'
+
+  function aiCfg() {
+    const c = (data.settings && data.settings.ai) || { provider: 'artifact' };
+    const preset = AI_PRESETS[c.provider] || AI_PRESETS.artifact;
+    return {
+      provider: c.provider || 'artifact',
+      shape: preset.shape,
+      baseUrl: (c.baseUrl || preset.baseUrl || '').replace(/\/+$/, ''),
+      apiKey: c.apiKey || '',
+      model: c.model || preset.model || '',
+    };
+  }
+
+  function aiStatusLine() {
+    const cfg = aiCfg();
+    const label = (AI_PRESETS[cfg.provider] || {}).label || cfg.provider;
+    const model = cfg.model || 'auto';
+    const configured = cfg.provider !== 'artifact' || cfg.apiKey;
+    const d = el('div', 'muted small ai-status');
+    d.innerHTML = `AI: <b>${label}</b> · modello <b>${model}</b>${cfg.provider === 'artifact' ? ' <span class="muted">(da file locale serve una chiave o Ollama — configura in Impostazioni → AI / Modelli)</span>' : ''}`;
+    return d;
+  }
+
   async function callModel(role, { system, messages, tools }) {
-    const body = { model: AI_MODELS[role] || 'claude-sonnet-4-6', max_tokens: 1000, system, messages };
-    if (tools) body.tools = tools;
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-      body: JSON.stringify(body),
-    });
+    const cfg = aiCfg();
+    const model = cfg.model || AI_MODELS[role] || 'claude-sonnet-4-6';
+    let url, headers, body, extract;
+    if (cfg.shape === 'openai') {
+      url = cfg.baseUrl + '/chat/completions';
+      headers = { 'content-type': 'application/json' };
+      if (cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
+      body = { model, max_tokens: 1000, messages: [{ role: 'system', content: system }].concat(messages) };
+      extract = (j) => ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '');
+    } else {
+      url = cfg.baseUrl + '/v1/messages';
+      headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
+      if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
+      body = { model, max_tokens: 1000, system, messages };
+      if (tools) body.tools = tools; // web_search etc. (Anthropic only)
+      extract = (j) => ((j.content || []).map(b => b.text || '').join(''));
+    }
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const j = await res.json();
     _aiState = 'ok';
-    return (j.content || []).map(b => b.text || '').join('');
+    return extract(j);
   }
   function stripFences(s) { return String(s || '').replace(/```(?:json)?/gi, '').trim(); }
   function safeJSON(s) { try { return JSON.parse(stripFences(s)); } catch (e) { return null; } }
@@ -1365,6 +1464,7 @@
 
     main.appendChild(el('div', 'note small disclaimer',
       '⚠ Strumento di simulazione, <b>non consulenza finanziaria</b>. Tutti i numeri sono calcolati da un motore deterministico in euro reali (potere d\'acquisto di oggi); l\'AI può solo tradurre le tue frasi in parametri e commentare i numeri prodotti dal motore, non li inventa.'));
+    main.appendChild(aiStatusLine());
 
     // ---- AI "what if" box ----
     main.appendChild(whatIfBox(fs));
@@ -1719,6 +1819,7 @@
 
     main.appendChild(el('div', 'note small disclaimer',
       '⚠ <b>Non è consulenza fiscale.</b> Gli agenti non fanno affermazioni categoriche sulla legge vigente e segnalano gli elementi sensibili alla data. La raccomandazione finale termina sempre con una lista di verifiche da fare con un professionista / il Belastingdienst. I numeri mostrati sono calcolati in JS, non dall\'AI.'));
+    main.appendChild(aiStatusLine());
 
     // deterministic facts panel
     const fb = el('div');
@@ -2023,5 +2124,5 @@
   window.addEventListener('DOMContentLoaded', render);
   if (document.readyState !== 'loading') render();
   // expose for debugging/tests in browser
-  window.FD = { get data() { return data; }, load, save, render, seedDemo, go, openEntry: openEntryForm };
+  window.FD = { get data() { return data; }, load, save, render, seedDemo, go, openEntry: openEntryForm, callModel, aiCfg };
 })();

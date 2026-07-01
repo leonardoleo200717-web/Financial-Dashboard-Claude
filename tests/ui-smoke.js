@@ -239,6 +239,45 @@ function run() {
     if (!window.FD.data.taxAssist.history.length) throw new Error('history not persisted');
   });
 
+  t('AI settings card renders provider options and persists config', () => {
+    window.FD.go('impostazioni');
+    const sel = document.querySelector('#ai-prov');
+    if (!sel) throw new Error('provider select missing');
+    if (!Array.from(sel.options).some(o => o.value === 'deepseek')) throw new Error('deepseek preset missing');
+    sel.value = 'deepseek'; sel.dispatchEvent(new window.Event('change'));
+    const ai = window.FD.data.settings.ai;
+    if (ai.provider !== 'deepseek') throw new Error('provider not saved');
+    if (!/deepseek/.test(ai.baseUrl)) throw new Error('preset baseUrl not applied');
+  });
+
+  t('callModel routes to OpenAI-compatible shape for DeepSeek/Ollama', async () => {
+    let captured = null;
+    const realFetch = window.fetch;
+    window.fetch = (url, opts) => { captured = { url, opts }; return Promise.resolve({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: 'OK-openai' } }] }) }); };
+    window.FD.data.settings.ai = { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-test', model: 'deepseek-chat' };
+    const out = await window.FD.callModel('parse', { system: 'sys', messages: [{ role: 'user', content: 'hi' }] });
+    window.fetch = realFetch;
+    if (out !== 'OK-openai') throw new Error('did not parse OpenAI response, got ' + out);
+    if (!/\/chat\/completions$/.test(captured.url)) throw new Error('wrong endpoint ' + captured.url);
+    if (captured.opts.headers['Authorization'] !== 'Bearer sk-test') throw new Error('missing bearer auth');
+    const body = JSON.parse(captured.opts.body);
+    if (body.model !== 'deepseek-chat' || body.messages[0].role !== 'system') throw new Error('bad openai body');
+  });
+
+  t('callModel routes to Anthropic shape with x-api-key when configured', async () => {
+    let captured = null;
+    const realFetch = window.fetch;
+    window.fetch = (url, opts) => { captured = { url, opts }; return Promise.resolve({ ok: true, json: () => Promise.resolve({ content: [{ text: 'OK-anthropic' }] }) }); };
+    window.FD.data.settings.ai = { provider: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'ak-test', model: 'claude-sonnet-4-6' };
+    const out = await window.FD.callModel('parse', { system: 'sys', messages: [{ role: 'user', content: 'hi' }] });
+    window.fetch = realFetch;
+    if (out !== 'OK-anthropic') throw new Error('did not parse Anthropic response');
+    if (!/\/v1\/messages$/.test(captured.url)) throw new Error('wrong endpoint ' + captured.url);
+    if (captured.opts.headers['x-api-key'] !== 'ak-test') throw new Error('missing x-api-key');
+    // restore default so later tests keep the graceful-down behaviour
+    window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
+  });
+
   t('no console.error / uncaught errors during smoke', () => {
     if (errors.length) throw new Error(errors.join('\n      '));
   });
