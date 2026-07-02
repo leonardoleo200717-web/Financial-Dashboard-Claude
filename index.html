@@ -67,6 +67,7 @@
   .data-row { cursor: pointer; }
   .data-row:hover { background: #f9fbfc; }
   .breakdown td { background: #f9fbfc; }
+  .year-row td { background: var(--bg); border-top: 2px solid var(--line); border-bottom: 2px solid var(--line); }
   .bk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 14px; text-align: left; }
   .breakdown-body { padding: 6px 4px; }
   .flag { color: var(--neg); cursor: help; }
@@ -682,8 +683,10 @@
     };
   }
 
-  function coastFire(fire, currentLiquid, currentAge, realReturn) {
-    const number = fireNumberSimple(fire);
+  // targetNumber (optional) overrides the default simple FIRE number — pass
+  // fireNumberTwoPhase().twoPhase to make Coast pension-aware.
+  function coastFire(fire, currentLiquid, currentAge, realReturn, targetNumber) {
+    const number = targetNumber != null ? targetNumber : fireNumberSimple(fire);
     const yearsToFire = fire.fireAge - currentAge;
     const yearsToCoast = fire.coastAge - currentAge;
     // capital required today so that, with no further contributions, you hit
@@ -1436,7 +1439,7 @@
     const total = months.map(m => E.totalNetWorth(data, m));
     // cumulative contributions
     let cum = 0; const cumContrib = months.map(m => { cum += E.portfolioContributions(data, m) || 0; return E.r2(cum); });
-    const fire = E.fireNumberSimple(data.settings.fire);
+    const fire = E.fireNumberTwoPhase(data.settings.fire).twoPhase; // same pension-aware target as the FIRE tab
     const labels = months.map(E.monthLabelIT);
     makeChart('c-networth', {
       type: 'line',
@@ -1446,10 +1449,10 @@
           { label: 'Patrimonio liquido', data: liquid, borderColor: '#3498db', backgroundColor: 'rgba(52,152,219,.1)', tension: .25, fill: false },
           { label: 'Totale (incl. pensioni)', data: total, borderColor: '#9b59b6', borderDash: [6, 4], tension: .25, fill: false },
           { label: 'Contributi cumulativi', data: cumContrib, borderColor: '#95a5a6', tension: .25, fill: false, pointRadius: 0 },
-          { label: 'FIRE number', data: months.map(() => fire), borderColor: NEG, borderDash: [2, 2], pointRadius: 0, fill: false },
+          { label: 'FIRE number (due fasi)', data: months.map(() => fire), borderColor: NEG, borderDash: [2, 2], pointRadius: 0, fill: false },
         ],
       },
-      options: baseLineOpts(),
+      options: withMilestones(baseLineOpts(), months),
     });
   }
 
@@ -1470,7 +1473,7 @@
           { label: 'Crescita di mercato cumulativa', data: cumM.map((v, i) => E.r2(v + cumC[i])), borderColor: '#27ae60', backgroundColor: 'rgba(39,174,96,.4)', fill: '-1', tension: .2, pointRadius: 0 },
         ],
       },
-      options: baseLineOpts(),
+      options: withMilestones(baseLineOpts(), months),
     });
   }
 
@@ -1489,7 +1492,7 @@
           backgroundColor: deltas.map(d => d == null ? '#ccc' : d >= 0 ? POS : NEG),
         }],
       },
-      options: Object.assign(baseLineOpts(), {
+      options: Object.assign(withMilestones(baseLineOpts(), months), {
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -1523,7 +1526,7 @@
           { label: 'Media 12 mesi', data: roll.map(v => v == null ? null : v * 100), borderColor: '#e67e22', borderDash: [5, 3], tension: .2, pointRadius: 0, spanGaps: true },
         ],
       },
-      options: pctLineOpts(),
+      options: withMilestones(pctLineOpts(), months),
     });
   }
 
@@ -1547,7 +1550,7 @@
           { label: 'Media 3 mesi', data: roll.map(v => v == null ? null : v), borderColor: '#e67e22', borderDash: [5, 3], pointRadius: 0, tension: .2, spanGaps: true },
         ],
       },
-      options: baseLineOpts(),
+      options: withMilestones(baseLineOpts(), months),
     });
   }
 
@@ -1576,7 +1579,7 @@
     makeChart('c-alloc', {
       type: 'line',
       data: { labels: months.map(E.monthLabelIT), datasets },
-      options: Object.assign(baseLineOpts(), { scales: { y: { stacked: true, ticks: { callback: v => fmt(v) } } } }),
+      options: Object.assign(withMilestones(baseLineOpts(), months), { scales: { y: { stacked: true, ticks: { callback: v => fmt(v) } } } }),
     });
   }
 
@@ -1612,9 +1615,16 @@
       <th>Contributi</th><th>Mercato</th><th>Spese stimate</th><th>Savings rate</th><th></th>
       </tr></thead>`;
     const tb = el('tbody');
+    // Annual rollup rows (spec Tab 2): rows are newest-first, so emit the year
+    // summary when we first enter each year.
+    const chrono = E.buildMonthlyTable(data); // ascending, for year aggregates
     let lastYear = null;
     rows.forEach(r => {
       const yr = r.ym.slice(0, 4);
+      if (yr !== lastYear) {
+        tb.appendChild(yearRollupRow(yr, chrono));
+        lastYear = yr;
+      }
       const tr = el('tr');
       tr.className = 'data-row';
       const flagMark = r.flags && r.flags.length
@@ -1632,10 +1642,39 @@
       tr.querySelector('[data-edit]').onclick = (ev) => { ev.stopPropagation(); openEntryForm(r.ym); };
       tr.onclick = () => toggleBreakdown(tr, r.ym);
       tb.appendChild(tr);
-      lastYear = yr;
     });
     table.appendChild(tb);
     main.appendChild(table);
+  }
+
+  // Bold year-summary row: Δ anno vs end of previous year (+ YoY %), summed
+  // contributions/market, expenses over unflagged months, mean savings rate.
+  function yearRollupRow(yr, chrono) {
+    const inYear = chrono.filter(r => r.ym.slice(0, 4) === yr);
+    const prevYear = chrono.filter(r => r.ym.slice(0, 4) < yr);
+    const endLiquid = inYear.length ? inYear[inYear.length - 1].liquid : null;
+    const startLiquid = prevYear.length ? prevYear[prevYear.length - 1].liquid : null;
+    const delta = (endLiquid != null && startLiquid != null) ? E.r2(endLiquid - startLiquid) : null;
+    const yoy = (delta != null && startLiquid) ? delta / startLiquid : null;
+    const sum = (get) => E.r2(inYear.reduce((s, r) => s + (get(r) || 0), 0));
+    const contributions = sum(r => r.contributions);
+    const market = sum(r => r.market);
+    const expenses = E.r2(inYear.filter(r => !(r.flags || []).length && r.expenses != null)
+      .reduce((s, r) => s + r.expenses, 0));
+    const srVals = inYear.map(r => r.savingsRate).filter(v => v != null);
+    const savingsRate = srVals.length ? srVals.reduce((a, b) => a + b, 0) / srVals.length : null;
+    const tr = el('tr', 'year-row');
+    tr.innerHTML = `
+      <td><b>${yr}</b></td>
+      <td><b>${fmt(endLiquid)}</b></td>
+      <td class="${delta >= 0 ? 'pos' : 'neg'}"><b>${delta == null ? '—' : fmt(delta)}</b></td>
+      <td><b>${yoy == null ? '—' : fmtP(yoy)}</b></td>
+      <td><b>${fmt(contributions)}</b></td>
+      <td><b>${fmt(market)}</b></td>
+      <td><b>${fmt(expenses)}</b></td>
+      <td><b>${savingsRate == null ? '—' : fmtP(savingsRate)}</b></td>
+      <td></td>`;
+    return tr;
   }
   function expCell(r) {
     if (r.flags && r.flags.includes('NEGATIVE_EXPENSES')) return `<span class="flag">⚠ verifica entrate</span>`;
@@ -1712,12 +1751,15 @@
     grid.appendChild(card('3.1 FIRE Number', fnBody, INFO_FIRE.number));
     $$('[data-swr]', fnBody).forEach(b => b.onclick = () => { f.swr = parseFloat(b.dataset.swr); save(); render(); });
 
-    // 3.2 Coast FIRE — crisp version. Uses FIRE capital, not total liquid.
+    // 3.2 Coast FIRE — pension-aware: targets the two-phase number (PME/AOW/
+    // Generali reduce the capital you actually need), so progress isn't
+    // under-reported against the pension-blind simple number.
     const today = currentMonth();
     const liquid = E.fireCapital(data, lastMonthWith(today)) || 0;
     const age = E.ageAt(data.settings.birthDate, today);
-    const coastBase = E.coastFire(f, liquid, age, f.realReturnBase);
-    const coastOpt = E.coastFire(f, liquid, age, f.realReturnOptimistic);
+    const coastTarget = tp.twoPhase;
+    const coastBase = E.coastFire(f, liquid, age, f.realReturnBase, coastTarget);
+    const coastOpt = E.coastFire(f, liquid, age, f.realReturnOptimistic, coastTarget);
     const coasting = liquid >= coastBase.requiredToday;
     const coastBody = el('div');
     coastBody.innerHTML = `
@@ -1728,9 +1770,12 @@
           : `Non ancora in Coast FIRE: ti manca <b>${fmt(coastBase.gapToday)}</b> di capitale per poter smettere di versare e arrivarci comunque.`}
       </div>
       <div class="kpi"><span>Capitale FIRE oggi</span><b>${fmt(liquid)}</b></div>
-      <div class="kpi"><span>Capitale che basterebbe oggi (5% reale)</span><b>${fmt(coastBase.requiredToday)}</b></div>
+      <div class="kpi"><span>Obiettivo (due fasi, con pensioni)</span><b>${fmt(coastTarget)}</b></div>
+      <div class="kpi"><span>Capitale che basterebbe oggi (${(f.realReturnBase * 100).toFixed(0)}% reale)</span><b>${fmt(coastBase.requiredToday)}</b></div>
       <div class="kpi"><span>Se smetti di versare oggi, FIRE a</span><b>${coastBase.ageIfStopNow ? coastBase.ageIfStopNow.toFixed(0) + ' anni' : '—'} <span class="muted" style="font-weight:400">(a ${(f.realReturnOptimistic * 100).toFixed(0)}%: ${coastOpt.ageIfStopNow ? coastOpt.ageIfStopNow.toFixed(0) : '—'})</span></b></div>`;
+    coastBody.appendChild(canvas('c-coast'));
     grid.appendChild(card('3.2 Coast FIRE', coastBody, INFO_FIRE.coast));
+    setTimeout(() => drawCoastCrossover(liquid, age, f, coastTarget), 0);
 
     // 3.3 On-track
     grid.appendChild(onTrackCard());
@@ -1764,12 +1809,14 @@
   }
 
   // Big headline card: when you reach the FIRE number at your real pace + a
-  // progress bar, plus Coast status.
+  // progress bar, plus Coast status. Targets the TWO-PHASE number — pensions
+  // reduce the capital actually needed, and the primary metric should say so.
   function fireHeadline() {
     const f = data.settings.fire;
     const today = currentMonth();
     const cap = E.fireCapital(data, lastMonthWith(today)) || 0;
-    const fireN = E.fireNumberSimple(f);
+    const tp = E.fireNumberTwoPhase(f);
+    const fireN = tp.twoPhase;
     const monthly = actualMonthlyContribution();
     const age = E.ageAt(data.settings.birthDate, today);
     const proj = E.project({ start: cap, monthlyContribution: monthly, annualReturn: f.realReturnBase, fireNumber: fireN, startYM: today, maxYears: 70 });
@@ -1779,21 +1826,47 @@
       arrival = E.ymParts(proj.reachedYM).y;
       if (age != null) arrivalAge = ` · età ${(age + E.monthsBetween(today, proj.reachedYM) / 12).toFixed(0)}`;
     } else arrival = 'oltre 70 anni';
-    const coast = E.coastFire(f, cap, age, f.realReturnBase);
+    const coast = E.coastFire(f, cap, age, f.realReturnBase, fireN);
     const coasting = cap >= coast.requiredToday;
     const body = el('div');
     body.innerHTML = `
       <div class="headline-row">
         <div><div class="muted small">Capitale FIRE</div><div class="big">${fmt(cap)}</div></div>
-        <div><div class="muted small">FIRE number</div><div class="big">${fmt(fireN)}</div></div>
+        <div><div class="muted small">FIRE number (con pensioni)</div><div class="big">${fmt(fireN)}</div></div>
         <div><div class="muted small">Arrivo stimato</div><div class="big">${arrival}<span class="muted" style="font-size:14px">${arrivalAge}</span></div></div>
       </div>
       <div class="progress"><div class="progress-fill" style="width:${(pct * 100).toFixed(1)}%"></div><span class="progress-label">${(pct * 100).toFixed(1)}% verso il FIRE number</span></div>
       <div class="note ${coasting ? 'pos' : ''}">${coasting
         ? '✓ Sei già in <b>Coast FIRE</b>: anche senza nuovi contributi arrivi al FIRE number entro i ' + f.fireAge + ' anni.'
         : 'Non ancora in Coast FIRE — gap di ' + fmt(coast.gapToday) + ' rispetto al capitale che basterebbe smettendo oggi.'}</div>
-      <div class="muted small">Ipotesi: versi <b>${fmt(monthly)}/mese</b> (mediana 12m) con rendimento ${(f.realReturnBase * 100).toFixed(1)}%. Cambia l'importo nella card "Proiezione".</div>`;
+      <div class="muted small">Obiettivo a due fasi (le pensioni riducono il fabbisogno di ${fmt(tp.pensionSaving)}; versione semplice: ${fmt(tp.simple)}). Ipotesi: versi <b>${fmt(monthly)}/mese</b> (mediana 12m) al ${(f.realReturnBase * 100).toFixed(1)}%.</div>`;
     return card('🔥 A che punto sei', body, INFO_FIRE.headline);
+  }
+
+  // Coast crossover: capital compounding with ZERO further contributions vs
+  // the target line — the crossing age is the "you could stop today" answer.
+  function drawCoastCrossover(cap, age, f, target) {
+    if (!$('#c-coast')) return;
+    const years = [];
+    const balBase = [], balOpt = [];
+    let b1 = cap, b2 = cap;
+    const horizon = Math.max(5, Math.ceil((f.fireAge - (age || 40)) + 15));
+    for (let y = 0; y <= horizon; y++) {
+      years.push(age != null ? Math.round(age + y) : y);
+      balBase.push(E.r2(b1)); balOpt.push(E.r2(b2));
+      b1 *= (1 + f.realReturnBase); b2 *= (1 + f.realReturnOptimistic);
+    }
+    makeChart('c-coast', {
+      type: 'line',
+      data: {
+        labels: years,
+        datasets: [
+          { label: 'Capitale senza nuovi versamenti (' + (f.realReturnBase * 100).toFixed(0) + '%)', data: balBase, borderColor: '#3498db', borderWidth: 2.5, pointRadius: 0, tension: .15 },
+          { label: (f.realReturnOptimistic * 100).toFixed(0) + '%', data: balOpt, borderColor: '#27ae60', borderDash: [4, 3], pointRadius: 0, tension: .15 },
+          { label: 'Obiettivo (due fasi)', data: years.map(() => target), borderColor: NEG, borderDash: [2, 2], pointRadius: 0 },
+        ],
+      }, options: baseLineOpts(),
+    });
   }
 
   function personalReturnCard() {
@@ -1907,7 +1980,7 @@
       projState.start = parseFloat($('#pj-start').value) || 0;
       projState.monthly = parseFloat($('#pj-monthly').value) || 0;
       projState.applyBox3 = $('#pj-box3').checked;
-      const fireN = E.fireNumberSimple(f);
+      const fireN = E.fireNumberTwoPhase(f).twoPhase; // pension-aware, same target as headline/coast
       const common = {
         start: projState.start, monthlyContribution: projState.monthly,
         fireNumber: fireN, startYM: today, maxYears: 50,
@@ -1929,7 +2002,7 @@
           datasets: [
             { label: 'Base 5%', data: base.series.filter((_, i) => i % 12 === 0).map(p => p.balance), borderColor: '#3498db', pointRadius: 0, tension: .2 },
             { label: 'Ottimistico 7%', data: opt.series.filter((_, i) => i % 12 === 0).map(p => p.balance), borderColor: '#27ae60', pointRadius: 0, tension: .2 },
-            { label: 'FIRE number', data: labels.map(() => fireN), borderColor: NEG, borderDash: [2, 2], pointRadius: 0 },
+            { label: 'FIRE number (due fasi)', data: labels.map(() => fireN), borderColor: NEG, borderDash: [2, 2], pointRadius: 0 },
           ],
         }, options: baseLineOpts(),
       });
@@ -2184,6 +2257,8 @@
       ['box3DragAnnual', 'Box 3 drag annuo', f.box3DragAnnual, 'fire'],
       ['box3StartDate', 'Box 3 da (YYYY-MM)', f.box3StartDate, 'fire', 'text'],
       ['marginalRateBox1', 'Aliquota marginale Box 1', f.marginalRateBox1, 'fire'],
+      ['meanReturn', 'Monte Carlo — rendimento medio', f.monteCarlo.meanReturn, 'mc'],
+      ['stdDev', 'Monte Carlo — volatilità (σ)', f.monteCarlo.stdDev, 'mc'],
     ];
     params.forEach(([key, label, val, scope, type]) => {
       const row = el('div', 'form-row');
@@ -2194,7 +2269,7 @@
     $$('[data-param]', p).forEach(inp => inp.onchange = () => {
       const key = inp.dataset.param, scope = inp.dataset.scope;
       let v = inp.type === 'number' ? parseFloat(inp.value) : inp.value;
-      if (scope === 'fire') f[key] = v; else data.settings[key] = v;
+      if (scope === 'fire') f[key] = v; else if (scope === 'mc') f.monteCarlo[key] = v; else data.settings[key] = v;
       save();
     });
 
@@ -2451,7 +2526,7 @@
       profile: {
         currentAge: age != null ? Math.round(age) : 36,
         retirementAge: f.fireAge || 55,
-        statePensionAge: 70,
+        statePensionAge: f.pensionStartAge || 67, // one source of truth with the FIRE tab (editable)
         endAge: 90,
         annualContribution: med != null && med > 0 ? Math.round(med * 12) : 24000,
         annualSpend: Math.round((f.monthlyExpenseFire || 2500) * 12),
@@ -3184,6 +3259,40 @@
   }
 
   /* --------------------------- chart options -------------------------- */
+  // Chart.js plugin: dashed vertical marker + label for each milestone whose
+  // month appears on the x-axis (spec: milestones on all time charts). Charts
+  // opt in via options.milestoneMarkers = [{index,label}] — plain data, so it
+  // survives the JSON clone used by the enlarge modal.
+  const milestonePlugin = {
+    id: 'fdMilestones',
+    afterDatasetsDraw(chart) {
+      const ms = chart.options && chart.options.milestoneMarkers;
+      if (!ms || !ms.length || !chart.chartArea) return;
+      const { ctx, chartArea, scales } = chart;
+      const x = scales && scales.x; if (!x || !x.getPixelForValue) return;
+      ms.forEach(m => {
+        const px = x.getPixelForValue(m.index);
+        if (!isFinite(px) || px < chartArea.left || px > chartArea.right) return;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(155,89,182,.55)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(px, chartArea.top); ctx.lineTo(px, chartArea.bottom); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(155,89,182,.9)'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText(m.label, Math.min(px + 4, chartArea.right - 70), chartArea.top + 10);
+        ctx.restore();
+      });
+    },
+  };
+  if (typeof Chart !== 'undefined' && Chart.register) Chart.register(milestonePlugin);
+
+  function withMilestones(options, months) {
+    const marks = (data.settings.milestones || [])
+      .map(m => ({ index: months.indexOf(m.date), label: m.label }))
+      .filter(m => m.index >= 0);
+    if (marks.length) options.milestoneMarkers = marks;
+    return options;
+  }
+
   function baseLineOpts() {
     return {
       responsive: true, maintainAspectRatio: false,

@@ -525,8 +525,10 @@
     };
   }
 
-  function coastFire(fire, currentLiquid, currentAge, realReturn) {
-    const number = fireNumberSimple(fire);
+  // targetNumber (optional) overrides the default simple FIRE number — pass
+  // fireNumberTwoPhase().twoPhase to make Coast pension-aware.
+  function coastFire(fire, currentLiquid, currentAge, realReturn, targetNumber) {
+    const number = targetNumber != null ? targetNumber : fireNumberSimple(fire);
     const yearsToFire = fire.fireAge - currentAge;
     const yearsToCoast = fire.coastAge - currentAge;
     // capital required today so that, with no further contributions, you hit

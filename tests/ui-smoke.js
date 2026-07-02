@@ -278,6 +278,28 @@ function run() {
     window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
   });
 
+  t('storico shows bold annual rollup rows with YoY', () => {
+    window.FD.go('storico');
+    const yearRows = document.querySelectorAll('.year-row');
+    if (!yearRows.length) throw new Error('no annual rollup rows');
+    if (!/^\d{4}$/.test(yearRows[0].querySelector('td b').textContent)) throw new Error('year label missing');
+  });
+
+  t('coast FIRE card is pension-aware and has a crossover chart', () => {
+    window.FD.go('fire');
+    if (!/Obiettivo \(due fasi, con pensioni\)/.test(document.body.textContent)) throw new Error('two-phase target missing from coast card');
+    if (!document.querySelector('#c-coast')) throw new Error('coast crossover canvas missing');
+  });
+
+  t('Monte Carlo params are editable in Settings', () => {
+    window.FD.go('impostazioni');
+    const mean = document.querySelector('[data-param="meanReturn"][data-scope="mc"]');
+    if (!mean) throw new Error('MC meanReturn input missing');
+    mean.value = '0.07'; mean.dispatchEvent(new window.Event('change'));
+    if (window.FD.data.settings.fire.monteCarlo.meanReturn !== 0.07) throw new Error('MC param not saved');
+    mean.value = '0.06'; mean.dispatchEvent(new window.Event('change'));
+  });
+
   t('archived account balance is NOT prefilled/written into a new month', () => {
     // archive an account whose last snapshot is the month before the new one
     const d = window.FD.data;
