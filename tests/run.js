@@ -208,16 +208,17 @@ console.log('\n=== Scenario 3: broker funding as transfer vs contribution ===');
   test('invested identical both ways', () => {
     approx(E.investedAndSavings(A.d, '2026-02').invested, E.investedAndSavings(B.d, '2026-02').invested);
   });
-  test('reconciliation: contribution path matches, transfer path flags mismatch', () => {
-    const recB = E.reconcile(B.d, '2026-02'); // contributions registered
-    const recA = E.reconcile(A.d, '2026-02'); // funded by transfer, no contribution registered
+  test('reconciliation treats transfers and contributions identically', () => {
+    const recB = E.reconcile(B.d, '2026-02'); // funded via contribution
+    const recA = E.reconcile(A.d, '2026-02'); // funded via internal transfer
     // invested here = 2500 - 600 - (600-1500) = 2500-600+900 = 2800
     approx(E.investedAndSavings(B.d, '2026-02').invested, 2800);
+    // Both workflows register the same €800 flow — funding a broker via a
+    // transfer is NOT a data-quality problem.
     assert.strictEqual(recB.contributions, 800);
-    // |800 - 2800| = 2000 > 50 → both actually mismatch because invested counts buffer drain.
-    // The meaningful check: transfer path has 0 registered contributions.
-    assert.strictEqual(recA.contributions, 0);
-    assert.ok(recA.mismatch, 'transfer-funded investment surfaces as unregistered');
+    assert.strictEqual(recA.contributions, 800);
+    approx(recA.diff, recB.diff);
+    assert.strictEqual(recA.mismatch, recB.mismatch);
   });
 }
 
@@ -318,16 +319,13 @@ console.log('\n=== Scenario 7: reconciliation matches registered contributions =
   const d = newData();
   const bank = addAccount(d, 'Bank', 'current');
   const broker = addAccount(d, 'Broker', 'broker');
-  // Design so invested ≈ registered contribution.
-  // start bank payday Jan = 2000, minus1 Jan = 1500.
+  // Internally consistent fixture: Jan payday 2000 = minus1 1500 + salary 500.
   snap(d, bank, '2026-01', 2000, 1500);
   snap(d, broker, '2026-01', 20000, null);
-  entry(d, '2026-01', { salaryNet: 2000 });
-  // Feb: income 2000, spend 1500, contribute 500 to broker. baseline stable (minus1 = 1500).
-  // bank end minus1 = 1500. start 2000. contributionsOut 500. expenses = 2000 -500 -1500 = 0? no.
-  // expenses = start(2000) + 0 - 500 - 0 - end(1500) = 0. That means spent 0, saved 500.
-  // invested = income(2000) - expenses(0) - ΔCash(1500-1500=0) = 2000. contributions=500 → mismatch.
-  // Adjust: make salary 500 so invested = 500.
+  entry(d, '2026-01', { salaryNet: 500 });
+  // Feb: salary 500 (delta 0), contribute 500 to broker, no spending.
+  // expenses = start(2000) + 0 − 500 − 0 − end(1500) = 0; ΔCash = 0.
+  // invested = 500 − 0 − 0 = 500 = registered → no mismatch.
   snap(d, bank, '2026-02', 2000, 1500);
   snap(d, broker, '2026-02', 20500, null);
   entry(d, '2026-02', { salaryNet: 500, contributions: [contrib(broker, 500, 'current')] });
@@ -458,6 +456,22 @@ console.log('\n=== Scenario 8: FIRE math ===');
     const opts = { start: 200000, monthlyContribution: 2000, currentAge: 36, fireAge: 55, pensionStartAge: 67, monthlyExpenseFire: 2500, expectedPensionMonthly: 1200, inflation: 0.025, meanReturn: 0.06, stdDev: 0.15, runs: 200, seed: 7 };
     approx(E.monteCarlo(opts).successProbability, E.monteCarlo(opts).successProbability, 0);
   });
+  test('Monte Carlo realizes the configured volatility (fan spread, not √12-collapsed)', () => {
+    // Pure growth, no flows: after 20y at 15% annual vol the P90/P10 spread of
+    // the fan must be wide (lognormal ≈ 5+). The old monthly-redraw bug
+    // collapsed realized vol to ~4.3% and gave a spread under ~2.2.
+    const r = E.monteCarlo({ start: 100000, monthlyContribution: 0, currentAge: 40, fireAge: 89, pensionStartAge: 99, monthlyExpenseFire: 0, expectedPensionMonthly: 0, inflation: 0, meanReturn: 0.06, stdDev: 0.15, runs: 600, endAge: 60, seed: 11 });
+    const last = r.fan[r.fan.length - 1];
+    assert.ok(last.p90 / last.p10 > 3.5, 'fan too narrow: P90/P10 = ' + (last.p90 / last.p10).toFixed(2));
+  });
+  test('coastFire: zero/negative real return → ageIfStopNow null, no Infinity', () => {
+    const f = { monthlyExpenseFire: 2000, swr: 0.035, coastAge: 45, fireAge: 55 };
+    const c0 = E.coastFire(f, 100000, 40, 0);
+    const cn = E.coastFire(f, 100000, 40, -0.02);
+    assert.strictEqual(c0.ageIfStopNow, null);
+    assert.strictEqual(cn.ageIfStopNow, null);
+    assert.ok(isFinite(c0.requiredToday) && isFinite(c0.gapToday));
+  });
 }
 
 /* =====================================================================
@@ -524,6 +538,17 @@ console.log('\n=== Scenario 10: FIRE simulator engine ===');
     assert.strictEqual(E.coastFireAge(rich, [{ id: 'x', value: 2000000, realReturn: 0.04, volatility: 0, kind: 'liquid' }]), 40);
     const poor = { currentAge: 40, retirementAge: 55, statePensionAge: 67, endAge: 90, annualContribution: 100, annualSpend: 80000, statePensionAnnual: 0 };
     assert.strictEqual(E.coastFireAge(poor, [{ id: 'x', value: 1000, realReturn: 0.02, volatility: 0, kind: 'liquid' }]), null);
+  });
+  test('monteCarloFire: classes share one market factor (no fake diversification)', () => {
+    // The same money as 4 identical classes vs 1 block must give the SAME
+    // success probability — independent per-class draws used to grant ~25pp
+    // of diversification that correlated equity classes don't have.
+    const prof = { currentAge: 36, retirementAge: 55, statePensionAge: 70, endAge: 90, annualContribution: 24000, annualSpend: 36000, statePensionAnnual: 0 };
+    const split = [1, 2, 3, 4].map(() => ({ value: 50000, realReturn: 0.05, volatility: 0.16, kind: 'liquid' }));
+    const block = [{ value: 200000, realReturn: 0.05, volatility: 0.16, kind: 'liquid' }];
+    const a = E.monteCarloFire(prof, split, 400, 42);
+    const b = E.monteCarloFire(prof, block, 400, 42);
+    approx(a.successProbability, b.successProbability, 0.001);
   });
   test('monteCarloFire: probability in [0,1], bands ordered p10≤p50≤p90, reproducible', () => {
     const mc1 = E.monteCarloFire(profile, classes, 200, 123);

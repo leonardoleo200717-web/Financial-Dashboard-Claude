@@ -109,7 +109,11 @@ function buildHistory(rng, scenarioId) {
 
     // ---- update CURRENT (bank) for this cycle ----
     if (k === 0) {
-      // first month: use the pre-seeded bankMinus1/bankPayday as-is (no cycle math)
+      // First month: keep the seeded minus1 but make the payday balance
+      // consistent with the declared income (payday = minus1 + salary + extra)
+      // — the reconcile identity for month 1 depends on it, exactly as real
+      // statements do.
+      bankPayday = bankMinus1 + salary + extra;
     } else {
       const netTransfersOutBank = bankTransferOut - bankTransferIn;
       bankMinus1 = bankPayday /*prev payday*/ + other + withdrawalsBack - spending - contribOutCurrent - netTransfersOutBank;
@@ -180,10 +184,12 @@ function checkScenario(h) {
     // 8) savings rate identity
     if (inc > 0) check('savingsRate', near(is.savingsRate, is.invested / inc), key);
 
-    // 9) reconciliation diff identity = currentContribNet - invested
+    // 9) reconciliation: on a fully-registered, internally-consistent history
+    //    the like-for-like diff must be ~0 and the flag must NEVER fire.
+    //    (registered flows + salary delta ≡ balance-derived invested)
     const rec = E.reconcile(data, key);
-    const ccn = E.contributionSplit(data.entries[key]).currentNet;
-    check('reconcile diff', near(rec.diff, ccn - is.invested), key);
+    if (rec.diff != null) check('reconcile diff ≈ 0 on consistent history', near(rec.diff, 0), key + ' diff=' + rec.diff);
+    check('no RECONCILE_MISMATCH on consistent history', rec.mismatch === false, key);
   });
 }
 
