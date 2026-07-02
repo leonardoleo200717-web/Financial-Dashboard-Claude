@@ -2317,8 +2317,15 @@
   function findMs(id) { return data.settings.milestones.find(m => m.id === id); }
 
   /* ------------------------- export / import -------------------------- */
+  // Export payload: everything EXCEPT the AI API key, which must never leave
+  // this browser (backups get shared/synced; the key does not belong in them).
+  function exportPayload() {
+    const clone = JSON.parse(JSON.stringify(data));
+    if (clone.settings && clone.settings.ai) clone.settings.ai.apiKey = '';
+    return clone;
+  }
   function doExport() {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     const d = new Date().toISOString().slice(0, 10);
@@ -2333,6 +2340,8 @@
       try {
         const parsed = JSON.parse(reader.result);
         const migrated = migrate(parsed);
+        // Never accept a key from a file; keep the one already in this browser.
+        if (migrated.settings && migrated.settings.ai) migrated.settings.ai.apiKey = (data.settings.ai && data.settings.ai.apiKey) || '';
         if (mode === 'merge') {
           const before = { acc: data.accounts.length, snaps: Object.keys(data.snapshots).length, months: E.monthSeries(data).length };
           const merged = mergeData(data, migrated);
@@ -3162,7 +3171,7 @@
   window.addEventListener('DOMContentLoaded', render);
   if (document.readyState !== 'loading') render();
   // expose for debugging/tests in browser
-  window.FD = { get data() { return data; }, load, save, render, seedDemo, go, openEntry: openEntryForm, callModel, aiCfg };
+  window.FD = { get data() { return data; }, load, save, render, seedDemo, go, openEntry: openEntryForm, callModel, aiCfg, exportPayload };
 })();
 
 </script>

@@ -278,6 +278,15 @@ function run() {
     window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
   });
 
+  t('JSON export never contains the AI API key', () => {
+    window.FD.data.settings.ai = { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-SECRET-123', model: 'deepseek-chat' };
+    const payload = window.FD.exportPayload();
+    const text = JSON.stringify(payload);
+    if (text.includes('sk-SECRET-123')) throw new Error('API key leaked into export');
+    if (window.FD.data.settings.ai.apiKey !== 'sk-SECRET-123') throw new Error('redaction mutated live data');
+    window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
+  });
+
   t('no console.error / uncaught errors during smoke', () => {
     if (errors.length) throw new Error(errors.join('\n      '));
   });
