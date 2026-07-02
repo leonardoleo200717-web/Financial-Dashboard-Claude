@@ -278,6 +278,37 @@ function run() {
     window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
   });
 
+  t('archived account balance is NOT prefilled/written into a new month', () => {
+    // archive an account whose last snapshot is the month before the new one
+    const d = window.FD.data;
+    const acc = { id: 'arch-test', name: 'Archiviato', type: 'broker', liquidity: 'liquid', color: '#123456', createdAt: '2026-01', archivedAt: '2026-03' };
+    d.accounts.push(acc);
+    d.snapshots['arch-test|2026-03'] = { accountId: 'arch-test', yearMonth: '2026-03', balancePayday: 99999, balancePaydayMinus1: null };
+    const ov0 = document.querySelector('.modal-overlay'); if (ov0) ov0.remove();
+    window.FD.openEntry('2026-04'); // new month right after the archive month
+    const saveBtn = document.querySelector('#ef-save');
+    saveBtn.click(); // confirm() stubbed true for the missing-balance prompt
+    if (d.snapshots['arch-test|2026-04']) throw new Error('archived balance resurrected into 2026-04');
+    // cleanup
+    d.accounts = d.accounts.filter(a => a.id !== 'arch-test');
+    delete d.snapshots['arch-test|2026-03'];
+    Object.keys(d.snapshots).filter(k => k.endsWith('|2026-04')).forEach(k => delete d.snapshots[k]);
+    delete d.entries['2026-04'];
+    window.FD.save(); window.FD.render();
+  });
+
+  t('account names are HTML-escaped (no XSS via account name)', () => {
+    const d = window.FD.data;
+    const evil = { id: 'xss-test', name: '<img src=x onerror="window.__xss=1">', type: 'broker', liquidity: 'liquid', color: '#000000', createdAt: '2026-01', archivedAt: null };
+    d.accounts.push(evil);
+    window.FD.go('impostazioni'); // renders account rows
+    const injected = document.querySelector('.acc-name img');
+    const flagged = window.__xss === 1;
+    d.accounts = d.accounts.filter(a => a.id !== 'xss-test');
+    window.FD.save(); window.FD.render();
+    if (injected || flagged) throw new Error('account name executed as HTML');
+  });
+
   t('JSON export never contains the AI API key', () => {
     window.FD.data.settings.ai = { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-SECRET-123', model: 'deepseek-chat' };
     const payload = window.FD.exportPayload();

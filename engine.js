@@ -298,13 +298,29 @@
     return { invested, savingsRate, totalIncome: inc, deltaCash, expenses: exp.value, flags };
   }
 
-  // §2.3 reconciliation: manual current-sourced contributions vs invested.
+  // §2.3 reconciliation: registered investment flows vs balance-derived
+  // invested, compared like-for-like.
+  //   Registered = current-sourced contributions + net internal transfers out
+  //   of current accounts (funding a broker via a transfer is a registered
+  //   flow, not a data-quality problem).
+  //   Timing adjustment: invested(m) is balance-derived on the payday cycle,
+  //   so by construction it equals registered flows PLUS the month-over-month
+  //   salary delta (income lands at the cycle end). Without adjusting for that
+  //   known delta the flag mostly measures salary variation — on real data it
+  //   fired on 13/17 months. diff ≠ 0 now means genuinely unexplained money.
   function reconcile(data, ym) {
     const is = investedAndSavings(data, ym);
     if (is.invested == null) return { mismatch: false, diff: null, contributions: null, invested: null };
     const entry = getEntry(data, ym);
-    const contrib = contributionSplit(entry).currentNet; // money sent to investments from CC
-    const diff = r2(contrib - is.invested);
+    const prevEntry = getEntry(data, ymPrev(ym));
+    const contrib = r2(contributionSplit(entry).currentNet + transferCurrentSplit(data, entry).net);
+    const pay = e => e ? (Number(e.salaryNet) || 0) + (Number(e.extraSalary) || 0) : null;
+    const salaryDelta = (entry && prevEntry) ? r2(pay(entry) - pay(prevEntry)) : null;
+    if (salaryDelta == null) {
+      // can't compare like-for-like without both months' income — don't guess
+      return { mismatch: false, diff: null, contributions: contrib, invested: is.invested };
+    }
+    const diff = r2(contrib + salaryDelta - is.invested);
     return {
       mismatch: Math.abs(diff) > 50,
       diff,
@@ -518,10 +534,11 @@
     const requiredToday = number / Math.pow(1 + realReturn, Math.max(0, yearsToFire));
     const coastNumberAtCoastAge = number / Math.pow(1 + realReturn, Math.max(0, fire.fireAge - fire.coastAge));
     let ageIfStopNow = null;
-    if (currentLiquid > 0 && currentLiquid < number) {
-      ageIfStopNow = currentAge + Math.log(number / currentLiquid) / Math.log(1 + realReturn);
-    } else if (currentLiquid >= number) {
+    if (currentLiquid >= number) {
       ageIfStopNow = currentAge;
+    } else if (currentLiquid > 0 && realReturn > 0) {
+      // with r ≤ 0 the capital never grows to the target — leave null
+      ageIfStopNow = currentAge + Math.log(number / currentLiquid) / Math.log(1 + realReturn);
     }
     return {
       number,
@@ -612,6 +629,7 @@
       let failed = false;
       let failAge = null;
       let cpIdx = 0;
+      let mRet = 0;
       for (let m = 0; m <= totalMonths; m++) {
         if (cpIdx < checkpoints.length && m === checkpoints[cpIdx]) {
           cpData[cpIdx].push(balance); cpIdx++;
@@ -619,9 +637,14 @@
         const age = currentAge + m / 12;
         if (crossed == null && balance >= fireNumber) crossed = age;
         if (m === totalMonths) break;
-        // annual return drawn once per 12 months, applied monthly
-        const annual = gaussian(meanReturn, stdDev, rng);
-        const mRet = Math.pow(1 + Math.max(-0.95, annual), 1 / 12) - 1;
+        // Annual return drawn ONCE per 12 months, applied monthly. Redrawing
+        // every month would average 12 independent draws and collapse the
+        // realized annual volatility to stdDev/√12 (~4% instead of 15%),
+        // silently overstating the success probability.
+        if (m % 12 === 0) {
+          const annual = gaussian(meanReturn, stdDev, rng);
+          mRet = Math.pow(1 + Math.max(-0.95, annual), 1 / 12) - 1;
+        }
         balance = balance * (1 + mRet);
         if (m < accumMonths) {
           balance += monthlyContribution;
@@ -811,7 +834,13 @@
       let depleted = null;
       for (let ai = 0; ai < ages.length; ai++) {
         const age = ages[ai];
-        bal.forEach(b => { const r = gaussian(b.mean, b.sd, rng); b.bal *= (1 + Math.max(-0.95, r)); });
+        // One shared market shock per year: class return = mean + vol × z.
+        // Independent per-class draws would grant diversification that highly
+        // correlated equity classes (US/EU/EM/SCV) don't actually provide, and
+        // measurably overstate the success probability. Full correlation is
+        // the conservative, honest simplification.
+        const z = gaussian(0, 1, rng);
+        bal.forEach(b => { const r = b.mean + b.sd * z; b.bal *= (1 + Math.max(-0.95, r)); });
         if (shock && age === shock.atAge) bal.forEach(b => { b.bal *= shockMult(b.sd, shock.severity); });
         const phase = age < profile.retirementAge ? 'accum' : 'decum';
         const liquidIdx = bal.map((b, i) => b.kind === 'liquid' ? i : -1).filter(i => i >= 0);

@@ -463,7 +463,10 @@
   function drawExpenses(months) {
     const exp = months.map(m => E.estimatedExpenses(data, m));
     const vals = exp.map(e => e.value);
-    const roll = E.rollingAvg(vals, null, months, 3);
+    // Flagged months (negative/missing) are plotted as hollow points but are
+    // excluded from the rolling average, per spec §2.2.
+    const avgVals = exp.map(e => (e.flags && e.flags.length) ? null : e.value);
+    const roll = E.rollingAvg(avgVals, null, months, 3);
     makeChart('c-expenses', {
       type: 'line',
       data: {
@@ -592,17 +595,17 @@
     html += '<div><b>Saldi conti</b><br>';
     (data.accounts || []).forEach(a => {
       const s = E.getSnapshot(data, a.id, ym);
-      if (s) html += `<span class="swatch" style="background:${a.color}"></span>${a.name}: ${fmt(s.balancePayday)}<br>`;
+      if (s) html += `<span class="swatch" style="background:${a.color}"></span>${escapeHtml(a.name)}: ${fmt(s.balancePayday)}<br>`;
     });
     html += '</div>';
     html += '<div><b>Movimenti</b><br>';
     (entry.contributions || []).forEach(c => {
       const a = E.accountById(data, c.accountId);
-      html += `Contributo → ${a ? a.name : '?'}: ${fmt(c.amount)} <span class="muted small">(${c.source})</span><br>`;
+      html += `Contributo → ${a ? escapeHtml(a.name) : '?'}: ${fmt(c.amount)} <span class="muted small">(${c.source})</span><br>`;
     });
     (entry.internalTransfers || []).forEach(t => {
       const f = E.accountById(data, t.fromAccountId), to = E.accountById(data, t.toAccountId);
-      html += `Trasf. ${f ? f.name : '?'} → ${to ? to.name : '?'}: ${fmt(t.amount)}<br>`;
+      html += `Trasf. ${f ? escapeHtml(f.name) : '?'} → ${to ? escapeHtml(to.name) : '?'}: ${fmt(t.amount)}<br>`;
     });
     html += '</div>';
     html += '</div>';
@@ -753,7 +756,7 @@
   // mystery what "capitale FIRE" includes.
   function fireCapitalCaption() {
     const active = E.accountsActiveAt(data, lastMonthWith(currentMonth()));
-    const incl = active.filter(a => E.includesInFire(a)).map(a => a.name);
+    const incl = active.filter(a => E.includesInFire(a)).map(a => escapeHtml(a.name));
     const txt = incl.length ? incl.join(', ') : 'nessun conto — configura in Impostazioni';
     return `<div class="note small">Capitale FIRE = <b>${txt}</b>. <span class="muted">Cash e risparmi esclusi (modifica in Impostazioni → Conti).</span></div>`;
   }
@@ -1003,7 +1006,7 @@
 
     // monthly table
     const table = el('table', 'data-table');
-    const header = ['Mese'].concat(pens.map(a => a.name)).concat(['Totale', 'Δ mese', 'Contributi del mese']);
+    const header = ['Mese'].concat(pens.map(a => escapeHtml(a.name))).concat(['Totale', 'Δ mese', 'Contributi del mese']);
     table.innerHTML = `<thead><tr>${header.map(h => `<th>${h}</th>`).join('')}</tr></thead>`;
     const tb = el('tbody');
     months.slice().reverse().forEach((m, idx, arr) => {
@@ -1077,7 +1080,7 @@
       const row = el('div', 'acc-row');
       row.innerHTML = `
         <input type="color" value="${a.color}" data-color="${a.id}">
-        <span class="acc-name">${a.name}</span>
+        <span class="acc-name">${escapeHtml(a.name)}</span>
         <span class="badge">${a.type}</span>
         <span class="badge ${E.isLiquid(a) ? 'liq' : 'lock'}">${E.isLiquid(a) ? 'liquid' : 'locked'}</span>
         <span class="muted small">${a.archivedAt ? 'archiviato ' + a.archivedAt : 'attivo'}</span>
@@ -1240,7 +1243,7 @@
       <div class="modal-body">
         <p>Saldo finale <b>${fmt(lastBal)}</b> a ${E.monthLabelIT(lastMonth)}. Registra un trasferimento verso il conto di destinazione per non perdere la continuità del patrimonio.</p>
         <div class="form-row"><label>Destinazione</label>
-          <select id="am-dest">${dest.map(a => `<option value="${a.id}">${a.name}</option>`).join('')}</select></div>
+          <select id="am-dest">${dest.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}</select></div>
         <div class="form-row"><label>Mese</label><input id="am-month" value="${lastMonth}" style="max-width:110px"></div>
       </div>
       <div class="modal-actions">
@@ -1906,10 +1909,14 @@
     const prevYM = E.ymPrev(ym);
     const isNewMonth = !existing && !E.monthSeries(data).includes(ym);
     const draftSnaps = {};
+    const activeIds = new Set(E.accountsActiveAt(data, ym).map(a => a.id));
     (data.accounts || []).forEach(a => {
       const s = E.getSnapshot(data, a.id, ym);
       if (s) { draftSnaps[a.id] = Object.assign({}, s); return; }
-      const prev = isNewMonth ? E.getSnapshot(data, a.id, prevYM) : null;
+      // Carry-forward prefill only for accounts active this month: an archived
+      // account's last balance must not be silently written into new months
+      // (the form doesn't even display it, so the user couldn't catch it).
+      const prev = (isNewMonth && activeIds.has(a.id)) ? E.getSnapshot(data, a.id, prevYM) : null;
       draftSnaps[a.id] = {
         accountId: a.id, yearMonth: ym,
         balancePayday: prev && prev.balancePayday != null ? prev.balancePayday : null,
@@ -1942,15 +1949,15 @@
           </section>
           <section><h3>2. Conto corrente</h3>
             ${curAccs.map(a => `
-              <div class="form-row"><label>${a.name} — saldo giorno−1</label><input type="number" data-snap-minus1="${a.id}" value="${valOr(draftSnaps[a.id].balancePaydayMinus1)}"></div>
-              <div class="form-row"><label>${a.name} — saldo payday</label><input type="number" data-snap-payday="${a.id}" value="${valOr(draftSnaps[a.id].balancePayday)}"></div>
+              <div class="form-row"><label>${escapeHtml(a.name)} — saldo giorno−1</label><input type="number" data-snap-minus1="${a.id}" value="${valOr(draftSnaps[a.id].balancePaydayMinus1)}"></div>
+              <div class="form-row"><label>${escapeHtml(a.name)} — saldo payday</label><input type="number" data-snap-payday="${a.id}" value="${valOr(draftSnaps[a.id].balancePayday)}"></div>
             `).join('')}
           </section>
           <section><h3>3. Saldi conti</h3>
             ${liquidAccs.filter(a => a.type !== 'current').map(a => `
-              <div class="form-row"><label>${a.name}</label><input type="number" data-snap-payday="${a.id}" value="${valOr(draftSnaps[a.id].balancePayday)}"></div>`).join('')}
+              <div class="form-row"><label>${escapeHtml(a.name)}</label><input type="number" data-snap-payday="${a.id}" value="${valOr(draftSnaps[a.id].balancePayday)}"></div>`).join('')}
             ${pensionAccs.length ? `<details open><summary>Pensioni</summary>
-              ${pensionAccs.map(a => `<div class="form-row"><label>${a.name}</label><input type="number" data-snap-payday="${a.id}" value="${valOr(draftSnaps[a.id].balancePayday)}"></div>`).join('')}
+              ${pensionAccs.map(a => `<div class="form-row"><label>${escapeHtml(a.name)}</label><input type="number" data-snap-payday="${a.id}" value="${valOr(draftSnaps[a.id].balancePayday)}"></div>`).join('')}
             </details>` : ''}
           </section>
           <section><h3>4. Contributi</h3><div id="ef-ghosts"></div><div id="ef-contribs"></div>
@@ -2016,7 +2023,7 @@
       if (!recurring.length) { box.innerHTML = ''; return; }
       box.innerHTML = `<div class="ghost">Ricorrenti del mese scorso: ${recurring.map((c, i) => {
         const a = E.accountById(data, c.accountId);
-        return `${a ? a.name : '?'} ${fmt(c.amount)}<button class="link" data-ghost="${i}">copia</button>`;
+        return `${a ? escapeHtml(a.name) : '?'} ${fmt(c.amount)}<button class="link" data-ghost="${i}">copia</button>`;
       }).join(' · ')}<button class="link" data-ghost-all>copia tutti</button></div>`;
       const copy = (c) => { entry.contributions.push({ id: uuid(), accountId: c.accountId, amount: c.amount, kind: 'recurring', source: c.source || 'current' }); };
       box.querySelectorAll('[data-ghost]').forEach(b => b.onclick = () => { copy(recurring[+b.dataset.ghost]); renderContribs(); updateSummary(); });
@@ -2028,7 +2035,7 @@
       entry.contributions.forEach((c, idx) => {
         const row = el('div', 'multi-row');
         row.innerHTML = `
-          <select data-c-acc="${idx}">${active.map(a => `<option value="${a.id}" ${a.id === c.accountId ? 'selected' : ''}>${a.name}</option>`).join('')}</select>
+          <select data-c-acc="${idx}">${active.map(a => `<option value="${a.id}" ${a.id === c.accountId ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}</select>
           <input type="number" data-c-amt="${idx}" value="${c.amount}" placeholder="importo" style="max-width:110px">
           <select data-c-kind="${idx}"><option value="recurring" ${c.kind === 'recurring' ? 'selected' : ''}>recurring</option><option value="one_off" ${c.kind === 'one_off' ? 'selected' : ''}>one-off</option></select>
           <select data-c-src="${idx}"><option value="current" ${c.source === 'current' ? 'selected' : ''}>current</option><option value="external" ${c.source === 'external' ? 'selected' : ''}>external</option></select>
@@ -2046,9 +2053,9 @@
       entry.internalTransfers.forEach((t, idx) => {
         const row = el('div', 'multi-row');
         row.innerHTML = `
-          <select data-t-from="${idx}">${active.map(a => `<option value="${a.id}" ${a.id === t.fromAccountId ? 'selected' : ''}>${a.name}</option>`).join('')}</select>
+          <select data-t-from="${idx}">${active.map(a => `<option value="${a.id}" ${a.id === t.fromAccountId ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}</select>
           <span>→</span>
-          <select data-t-to="${idx}">${active.map(a => `<option value="${a.id}" ${a.id === t.toAccountId ? 'selected' : ''}>${a.name}</option>`).join('')}</select>
+          <select data-t-to="${idx}">${active.map(a => `<option value="${a.id}" ${a.id === t.toAccountId ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}</select>
           <input type="number" data-t-amt="${idx}" value="${t.amount}" placeholder="importo" style="max-width:110px">
           <input data-t-note="${idx}" value="${t.note || ''}" placeholder="nota" style="max-width:120px">
           <button class="link neg" data-t-del="${idx}">×</button>`;
