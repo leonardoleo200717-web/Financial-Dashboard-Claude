@@ -464,6 +464,14 @@ console.log('\n=== Scenario 8: FIRE math ===');
     const last = r.fan[r.fan.length - 1];
     assert.ok(last.p90 / last.p10 > 3.5, 'fan too narrow: P90/P10 = ' + (last.p90 / last.p10).toFixed(2));
   });
+  test('coastFire honors a custom (pension-aware) target number', () => {
+    const f = { monthlyExpenseFire: 2500, swr: 0.035, coastAge: 45, fireAge: 55 };
+    const simple = E.coastFire(f, 200000, 40, 0.05);
+    const lower = E.coastFire(f, 200000, 40, 0.05, 500000); // two-phase style target
+    assert.ok(lower.number === 500000 && simple.number > 500000);
+    assert.ok(lower.requiredToday < simple.requiredToday, 'lower target needs less today');
+    assert.ok(lower.ageIfStopNow < simple.ageIfStopNow, 'lower target reached earlier');
+  });
   test('coastFire: zero/negative real return → ageIfStopNow null, no Infinity', () => {
     const f = { monthlyExpenseFire: 2000, swr: 0.035, coastAge: 45, fireAge: 55 };
     const c0 = E.coastFire(f, 100000, 40, 0);
