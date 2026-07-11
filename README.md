@@ -10,7 +10,20 @@ planning for a single user. Italian UI, EUR only, manual monthly data entry,
 ## 1. Run it
 
 Open **`index.html`** in any modern browser. No server, no build, no install —
-Chart.js loads from a CDN, everything else is in the file.
+**fully offline** (Chart.js is inlined; nothing is fetched), everything in the
+file, all data in `localStorage`.
+
+### Install as an app (PWA — free, offline, no store)
+
+It's a Progressive Web App. Publish it on **GitHub Pages** (free static hosting,
+no server): repo **Settings → Pages → Source: "GitHub Actions"** — the included
+workflow (`.github/workflows/pages.yml`) builds and deploys on every push to
+`main`. Then on **Android/desktop Chrome** open the Pages URL → **Install**
+(or *Add to Home screen*). It runs standalone and works offline; the deterministic
+engine needs no network (the AI tabs need a provider/key or Claude Artifacts).
+An `.xls` opened locally can't register a service worker, so use the Pages URL
+(HTTPS) for the installable app. For a real Play-Store/side-load **APK**, wrap the
+Pages PWA with Bubblewrap (TWA) or Capacitor.
 
 First run: **Impostazioni → Dati → Carica dati demo** for a sample dataset, or
 use the empty-state button to enter your first month. To load your own data,

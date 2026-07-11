@@ -9,7 +9,7 @@ const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..');
 let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 // Drop the external Chart.js CDN <script> (no network); we inject a stub instead.
-html = html.replace(/<script src="https:\/\/cdn[^"]+"><\/script>/, '');
+html = html.replace(/<script src="https:\/\/cdn[^"]+"><\/script>/, '').replace(/<script id="vendor-chart">[\s\S]*?<\/script>/, '');
 
 const errors = [];
 const dom = new JSDOM(html, {

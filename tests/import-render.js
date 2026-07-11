@@ -4,7 +4,7 @@
 const fs = require('fs'), path = require('path');
 const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..');
-let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/<script src="https:\/\/cdn[^"]+"><\/script>/, '');
+let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/<script src="https:\/\/cdn[^"]+"><\/script>/, '').replace(/<script id="vendor-chart">[\s\S]*?<\/script>/, '');
 const json = fs.readFileSync(path.join(ROOT, 'financial-dashboard-2025-2026.json'), 'utf8');
 const errors = [];
 const dom = new JSDOM(html, {

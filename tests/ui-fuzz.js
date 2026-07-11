@@ -10,7 +10,7 @@ const { JSDOM } = require('jsdom');
 const E = require(path.join(__dirname, '..', 'engine.js'));
 
 const ROOT = path.join(__dirname, '..');
-let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/<script src="https:\/\/cdn[^"]+"><\/script>/, '');
+let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/<script src="https:\/\/cdn[^"]+"><\/script>/, '').replace(/<script id="vendor-chart">[\s\S]*?<\/script>/, '');
 
 const errors = [];
 const dom = new JSDOM(html, {
