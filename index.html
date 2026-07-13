@@ -300,7 +300,14 @@
     for (const acc of data.accounts || []) {
       if (!pred(acc)) continue;
       const s = getSnapshot(data, acc.id, ym);
-      if (!s || s.balancePayday == null) continue;
+      if (!s || s.balancePayday == null) {
+        // pots without statements (e.g. PME): estimated from contributions
+        if (acc.estimateFromContributions) {
+          const est = estimatedPensionBalance(data, acc, ym);
+          if (est != null) { sum += est; any = true; }
+        }
+        continue;
+      }
       sum += s.balancePayday; any = true;
     }
     return any ? r2(sum) : null;
@@ -420,6 +427,12 @@
     const flags = [];
     const prev = ymPrev(ym);
     const entry = getEntry(data, ym);
+
+    // Bank-statement truth beats the residual estimate: when the import set
+    // entry.expensesActual, use it (flag ACTUAL is informational, not a warning).
+    if (entry && entry.expensesActual != null && isFinite(entry.expensesActual)) {
+      return { value: r2(entry.expensesActual), flags: ['ACTUAL'] };
+    }
 
     const start = sumCurrent(data, prev, 'balancePayday');   // cycle start cash
     const end = sumCurrent(data, ym, 'balancePaydayMinus1'); // cycle end cash
@@ -669,6 +682,247 @@
       }
       return cnt ? sum / cnt : null;
     });
+  }
+
+  /* ================= Statement import (ABN AMRO / Scalable) ============
+     Pure parsers + monthly digest. The dashboard cannot read binary XLS;
+     ABN users must download the TXT (TAB) format, which has the exact same
+     8 columns: accountNumber, mutationcode, transactiondate(YYYYMMDD),
+     valuedate, startsaldo, endsaldo, amount, description.
+     Scalable Broker CSV: ';'-separated, decimal comma, header
+     date;time;status;reference;description;assetType;type;isin;shares;price;
+     amount;fee;tax;currency.
+     ==================================================================== */
+
+  // "1.234,56" | "1234,56" | "1234.56" | 1234.56 → number
+  function parseAmount(v) {
+    if (typeof v === 'number') return v;
+    let s = String(v == null ? '' : v).trim();
+    if (!s) return 0;
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+    const n = parseFloat(s);
+    return isFinite(n) ? n : 0;
+  }
+  function ymdToIso(v) { // 20260703 / "20260703" → "2026-07-03"
+    const s = String(v).replace(/\.0$/, '').trim();
+    if (/^\d{8}$/.test(s)) return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8);
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    return null;
+  }
+  function extractIban(description) {
+    // Uppercase-only body (no /i): ABN prints IBANs unspaced in caps; a
+    // case-insensitive class would swallow following lowercase words.
+    const m = String(description || '').match(/IBAN[:\s]*([A-Z]{2}\d{2}[A-Z0-9]{6,30})/);
+    return m ? m[1] : null;
+  }
+
+  // → [{account, date:"YYYY-MM-DD", ym, start, end, amount, description, counterIban}]
+  function parseABNStatement(text) {
+    const rows = [];
+    String(text || '').split(/\r?\n/).forEach(line => {
+      if (!line.trim()) return;
+      const cells = line.split('\t').length >= 8 ? line.split('\t') : line.split(';');
+      if (cells.length < 8) return;
+      if (/accountNumber/i.test(cells[0])) return; // header
+      const date = ymdToIso(cells[2]);
+      if (!date) return;
+      rows.push({
+        account: String(cells[0]).replace(/\.0$/, '').trim(),
+        date, ym: date.slice(0, 7),
+        start: parseAmount(cells[4]), end: parseAmount(cells[5]),
+        amount: parseAmount(cells[6]),
+        description: String(cells[7] || '').trim(),
+        counterIban: extractIban(cells[7]),
+      });
+    });
+    rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    return rows;
+  }
+
+  // → [{date, ym, status, description, assetType, type, isin, amount, fee}]
+  function parseScalableCSV(text) {
+    const lines = String(text || '').split(/\r?\n/).filter(l => l.trim());
+    if (!lines.length) return [];
+    const out = [];
+    lines.forEach((line, i) => {
+      if (i === 0 && /^date;/i.test(line)) return;
+      const c = line.split(';').map(s => s.replace(/^"|"$/g, ''));
+      if (c.length < 11) return;
+      const date = ymdToIso(c[0]);
+      if (!date) return;
+      out.push({
+        date, ym: date.slice(0, 7), status: c[2], description: c[4],
+        assetType: c[5], type: c[6], isin: c[7] || null,
+        amount: parseAmount(c[10]), fee: parseAmount(c[11]),
+      });
+    });
+    return out.filter(r => r.status === 'Executed')
+      .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  }
+
+  // Balance at end of a given ISO date = endsaldo of the last row on/before it.
+  function abnBalanceAt(rows, isoDate) {
+    let bal = null;
+    for (const r of rows) { if (r.date <= isoDate) bal = r.end; else break; }
+    return bal;
+  }
+  function isoDate(ym, day) {
+    const { y, m } = ymParts(ym);
+    const last = new Date(y, m, 0).getDate();
+    return ym + '-' + String(Math.min(Math.max(1, day), last)).padStart(2, '0');
+  }
+  function isoAddDays(iso, n) {
+    const d = new Date(iso + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
+
+  /* Monthly digest of an ABN statement.
+     ownIbans: { IBAN → accountId } for the user's OTHER accounts (savings,
+     Scalable, second savings…). Transfers to/from those are internal moves,
+     not spending/income. Salary heuristic: largest non-own credit within
+     [payday−3, payday+1]; always shown in a preview for the user to amend.
+     actualExpenses(m): Σ debits in cycle [payday(m−1), payday(m)−1] excluding
+     transfers to own IBANs — replaces the residual estimate with bank truth. */
+  function abnMonthlyDigest(rows, opts) {
+    const paydayDay = (opts && opts.paydayDay) || 25;
+    const ownIbans = (opts && opts.ownIbans) || {};
+    const own = iban => iban && ownIbans[iban] != null;
+    const months = Array.from(new Set(rows.map(r => r.ym))).sort();
+    const out = {};
+    months.forEach(ym => {
+      const payday = isoDate(ym, paydayDay);
+      const prevYmVal = ymPrev(ym);
+      const prevPayday = isoDate(prevYmVal, paydayDay);
+      const balancePayday = abnBalanceAt(rows, payday);
+      const balancePaydayMinus1 = abnBalanceAt(rows, isoAddDays(payday, -1));
+      // salary: largest credit near payday not from an own account
+      let salary = 0;
+      rows.forEach(r => {
+        if (r.amount > salary && !own(r.counterIban)
+          && r.date >= isoAddDays(payday, -3) && r.date <= isoAddDays(payday, 1)) salary = r.amount;
+      });
+      // own-account transfers dated in this calendar month
+      const transfers = rows.filter(r => r.ym === ym && own(r.counterIban)).map(r => ({
+        date: r.date, amount: r2(Math.abs(r.amount)),
+        direction: r.amount < 0 ? 'out' : 'in',
+        counterAccountId: ownIbans[r.counterIban],
+      }));
+      // actual spending over the cycle prevPayday … payday−1
+      let spent = 0, otherIncome = 0;
+      rows.forEach(r => {
+        if (r.date >= prevPayday && r.date < payday) {
+          if (r.amount < 0 && !own(r.counterIban)) spent += -r.amount;
+          if (r.amount > 0 && !own(r.counterIban) && r.amount !== salary) otherIncome += r.amount;
+        }
+      });
+      out[ym] = {
+        ym, balancePayday, balancePaydayMinus1,
+        salary: r2(salary), otherIncome: r2(otherIncome),
+        actualExpenses: r2(spent), transfers,
+      };
+    });
+    // first month's cycle start lies before the statement window → its
+    // actualExpenses is partial; mark it so the UI can warn.
+    if (months.length) out[months[0]].partial = true;
+    return out;
+  }
+
+  /* Scalable digest: net personal cash in/out per month (Deposits −
+     Withdrawals) and portfolio-internal items (fees, interest, dividends).
+     Used to corroborate/fill contributions — the ABN side is authoritative
+     for transfers to avoid double counting. */
+  function scalableMonthlyDigest(rows) {
+    const out = {};
+    rows.forEach(r => {
+      const o = out[r.ym] || (out[r.ym] = { ym: r.ym, deposits: 0, withdrawals: 0, fees: 0, interest: 0, dividends: 0 });
+      if (r.assetType === 'Cash') {
+        if (r.type === 'Deposit') o.deposits += r.amount;
+        else if (r.type === 'Withdrawal' || r.type === 'Cash Transfer Out') o.withdrawals += Math.abs(r.amount);
+        else if (r.type === 'Fee') o.fees += Math.abs(r.amount);
+        else if (r.type === 'Interest') o.interest += r.amount;
+        else if (r.type === 'Distribution') o.dividends += r.amount;
+      }
+    });
+    Object.values(out).forEach(o => ['deposits', 'withdrawals', 'fees', 'interest', 'dividends'].forEach(k => o[k] = r2(o[k])));
+    return out;
+  }
+
+  /* Merge an ABN digest into the dataset (additive; existing manual values win
+     unless overwrite=true). Creates/updates snapshots for the current account,
+     entry income fields, actualExpenses, and internal transfers (deduped by
+     month+amount+counterAccount). Returns a change log for the preview. */
+  function applyAbnDigest(data, digest, currentAccountId, opts) {
+    const overwrite = !!(opts && opts.overwrite);
+    const log = [];
+    Object.values(digest).forEach(mo => {
+      const ym = mo.ym;
+      const key = currentAccountId + '|' + ym;
+      const snap = data.snapshots[key] || { accountId: currentAccountId, yearMonth: ym, balancePayday: null, balancePaydayMinus1: null };
+      if (mo.balancePayday != null && (overwrite || snap.balancePayday == null)) { snap.balancePayday = mo.balancePayday; log.push(ym + ': saldo payday ' + mo.balancePayday); }
+      if (mo.balancePaydayMinus1 != null && (overwrite || snap.balancePaydayMinus1 == null)) { snap.balancePaydayMinus1 = mo.balancePaydayMinus1; }
+      data.snapshots[key] = snap;
+      const entry = data.entries[ym] || {
+        yearMonth: ym, salaryNet: 0, extraSalary: 0, otherIncome: 0,
+        paydayDayOfMonth: (data.settings && data.settings.defaultPaydayDayOfMonth) || 25,
+        contributions: [], internalTransfers: [], flags: [],
+      };
+      if (mo.salary && (overwrite || !entry.salaryNet)) { entry.salaryNet = mo.salary; log.push(ym + ': stipendio ' + mo.salary); }
+      if (mo.otherIncome && (overwrite || !entry.otherIncome)) entry.otherIncome = mo.otherIncome;
+      if (mo.actualExpenses != null && !mo.partial && (overwrite || entry.expensesActual == null)) {
+        entry.expensesActual = mo.actualExpenses; log.push(ym + ': spese reali ' + mo.actualExpenses);
+      }
+      (mo.transfers || []).forEach(t => {
+        const fromId = t.direction === 'out' ? currentAccountId : t.counterAccountId;
+        const toId = t.direction === 'out' ? t.counterAccountId : currentAccountId;
+        const dup = (entry.internalTransfers || []).some(x =>
+          x.fromAccountId === fromId && x.toAccountId === toId && Math.abs(x.amount - t.amount) < 0.01);
+        if (!dup) {
+          entry.internalTransfers.push({ id: 'imp-' + ym + '-' + fromId.slice(-4) + '-' + Math.round(t.amount * 100), fromAccountId: fromId, toAccountId: toId, amount: t.amount, note: 'import estratto ' + t.date });
+          log.push(ym + ': trasferimento ' + t.amount);
+        }
+      });
+      data.entries[ym] = entry;
+    });
+    return log;
+  }
+
+  /* ---------- pension pots without statements (e.g. PME) ---------------
+     account.estimateFromContributions = true → when a month has no snapshot,
+     its balance is ESTIMATED as all registered contributions compounded
+     monthly at account.assumedAnnualReturn (default 3% real). Clearly labeled
+     a stima in the UI; a real snapshot always wins. */
+  function estimatedPensionBalance(data, acc, ym) {
+    const mRet = Math.pow(1 + (acc.assumedAnnualReturn != null ? acc.assumedAnnualReturn : 0.03), 1 / 12) - 1;
+    const months = monthSeries(data).filter(m => ymCompare(m, ym) <= 0);
+    let bal = 0, seeded = false;
+    months.forEach(m => {
+      const s = getSnapshot(data, acc.id, m);
+      if (s && s.balancePayday != null) { bal = s.balancePayday; seeded = true; return; }
+      bal = bal * (1 + mRet) + contributionsForAccount(getEntry(data, m), acc.id) + transfersForAccount(getEntry(data, m), acc.id);
+    });
+    if (!seeded && bal === 0) return null;
+    return r2(bal);
+  }
+
+  /* ------------- lijfrente planner (Box 1 deduction + Box 3) -----------
+     Deterministic arithmetic only — the jaarruimte (deduction space) depends
+     on income and pension accrual and MUST be verified with the
+     Belastingdienst; this is a reminder, not advice. */
+  function lijfrentePlan(fire, annualContribution) {
+    const a = Math.max(0, Number(annualContribution) || 0);
+    const box1Refund = r2(a * (fire.marginalRateBox1 || 0.37));
+    const box3AnnualSaving = r2(a * (fire.box3DragAnnual || 0));
+    return {
+      annualContribution: a,
+      box1Refund,
+      box3AnnualSaving,          // recurring: assets moved out of Box 3 base
+      firstYearBenefit: r2(box1Refund + box3AnnualSaving),
+      netCost: r2(a - box1Refund),
+      // Box 3 saving compounds: after n years of contributing `a`, the base
+      // removed is n×a → saving that year ≈ n×a×drag
+      box3SavingAfterYears: n => r2(a * n * (fire.box3DragAnnual || 0)),
+    };
   }
 
   /* ============================ §3 FIRE math ========================== */
@@ -1086,6 +1340,10 @@
     project, monteCarlo, planProjectionCurve, mulberry32,
     // FIRE simulator (asset-class, real €)
     fireClassTotals, simulateFireDeterministic, coastFireAge, monteCarloFire,
+    // statement import + pension estimate + lijfrente planner
+    parseAmount, ymdToIso, extractIban, parseABNStatement, parseScalableCSV,
+    abnMonthlyDigest, scalableMonthlyDigest, applyAbnDigest,
+    estimatedPensionBalance, lijfrentePlan,
   };
 });
 
