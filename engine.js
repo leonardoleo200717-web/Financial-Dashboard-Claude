@@ -599,14 +599,21 @@
   /* Monthly digest of an ABN statement.
      ownIbans: { IBAN → accountId } for the user's OTHER accounts (savings,
      Scalable, second savings…). Transfers to/from those are internal moves,
-     not spending/income. Salary heuristic: largest non-own credit within
-     [payday−3, payday+1]; always shown in a preview for the user to amend.
+     not spending/income.
+     sharedExpenseIbans: { IBAN → label } for accounts where a partner also
+     contributes (e.g. common household account). Credits FROM those IBANs
+     are the partner's contribution and must be excluded from otherIncome —
+     they are not the user's money.
+     Salary heuristic: largest non-own credit within [payday−3, payday+1];
+     always shown in a preview for the user to amend.
      actualExpenses(m): Σ debits in cycle [payday(m−1), payday(m)−1] excluding
      transfers to own IBANs — replaces the residual estimate with bank truth. */
   function abnMonthlyDigest(rows, opts) {
     const paydayDay = (opts && opts.paydayDay) || 25;
     const ownIbans = (opts && opts.ownIbans) || {};
+    const sharedExpenseIbans = (opts && opts.sharedExpenseIbans) || {};
     const own = iban => iban && ownIbans[iban] != null;
+    const shared = iban => iban && sharedExpenseIbans[iban] != null;
     const months = Array.from(new Set(rows.map(r => r.ym))).sort();
     const out = {};
     months.forEach(ym => {
@@ -615,10 +622,10 @@
       const prevPayday = isoDate(prevYmVal, paydayDay);
       const balancePayday = abnBalanceAt(rows, payday);
       const balancePaydayMinus1 = abnBalanceAt(rows, isoAddDays(payday, -1));
-      // salary: largest credit near payday not from an own account
+      // salary: largest credit near payday not from an own/shared account
       let salary = 0;
       rows.forEach(r => {
-        if (r.amount > salary && !own(r.counterIban)
+        if (r.amount > salary && !own(r.counterIban) && !shared(r.counterIban)
           && r.date >= isoAddDays(payday, -3) && r.date <= isoAddDays(payday, 1)) salary = r.amount;
       });
       // own-account transfers dated in this calendar month
@@ -628,23 +635,53 @@
         counterAccountId: ownIbans[r.counterIban],
       }));
       // actual spending over the cycle prevPayday … payday−1
-      let spent = 0, otherIncome = 0;
+      let spent = 0, otherIncome = 0, partnerContributions = 0;
+      const categories = {};
       rows.forEach(r => {
         if (r.date >= prevPayday && r.date < payday) {
-          if (r.amount < 0 && !own(r.counterIban)) spent += -r.amount;
-          if (r.amount > 0 && !own(r.counterIban) && r.amount !== salary) otherIncome += r.amount;
+          if (r.amount < 0 && !own(r.counterIban)) {
+            spent += -r.amount;
+            const cat = categorizeTransaction(r.description);
+            categories[cat] = (categories[cat] || 0) + (-r.amount);
+          }
+          if (r.amount > 0 && !own(r.counterIban) && r.amount !== salary) {
+            if (shared(r.counterIban)) {
+              partnerContributions += r.amount;
+            } else {
+              otherIncome += r.amount;
+            }
+          }
         }
       });
       out[ym] = {
         ym, balancePayday, balancePaydayMinus1,
         salary: r2(salary), otherIncome: r2(otherIncome),
+        partnerContributions: r2(partnerContributions),
         actualExpenses: r2(spent), transfers,
+        categories: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, r2(v)])),
       };
     });
-    // first month's cycle start lies before the statement window → its
-    // actualExpenses is partial; mark it so the UI can warn.
     if (months.length) out[months[0]].partial = true;
     return out;
+  }
+
+  function categorizeTransaction(desc) {
+    if (!desc) return 'Altro';
+    const d = desc.toUpperCase();
+    if (/ALBERT HEIJN|AH TO GO|JUMBO|LIDL|ALDI|PLUS |SPAR |DIRK|COOP /i.test(d)) return 'Spesa alimentare';
+    if (/THUISBEZORGD|UBER\s*EATS|DELIVEROO|DOMINOS|MCDONALDS/i.test(d)) return 'Food delivery';
+    if (/RISTORANTE|RESTAURANT|CAFE|COFFEE|STARBUCKS|BAR /i.test(d)) return 'Ristoranti e bar';
+    if (/NS GROEP|NS REIZIGERS|GVB|OV-CHIPKAART|TRANSAVIA|KLM|RYANAIR|BOOKING|AIRBNB/i.test(d)) return 'Trasporti e viaggi';
+    if (/ZILVEREN KRUIS|ZORGVERZEK|APOTHEEK|HUISARTS/i.test(d)) return 'Salute';
+    if (/HUUR|RENT|HYPOTHEEK|HOOFTLAAN/i.test(d)) return 'Affitto/casa';
+    if (/BUDGET ENERGIE|ENECO|VATTENFALL|BRABANT WATER|ZIGGO|KPN|T-MOBILE|BUDGET INTERNET/i.test(d)) return 'Utenze';
+    if (/NETFLIX|SPOTIFY|DISNEY|YOUTUBE|PLAYSTATION|STEAM|PRIME/i.test(d)) return 'Abbonamenti';
+    if (/ANWB|VERZEKER|ABN AMRO SCHADEV/i.test(d)) return 'Assicurazioni';
+    if (/GEMEENTE|BELASTING/i.test(d)) return 'Tasse e imposte';
+    if (/SPORT|GYM|BOULDE|ATLETIEK|FITNESS/i.test(d)) return 'Sport';
+    if (/TIKKIE/i.test(d)) return 'Tikkie';
+    if (/SEPA\s+INCASSO/i.test(d)) return 'Incassi automatici';
+    return 'Altro';
   }
 
   /* Scalable digest: net personal cash in/out per month (Deposits −
@@ -1161,7 +1198,7 @@
     fireClassTotals, simulateFireDeterministic, coastFireAge, monteCarloFire,
     // statement import + pension estimate + lijfrente planner
     parseAmount, ymdToIso, extractIban, parseABNStatement, parseScalableCSV,
-    abnMonthlyDigest, scalableMonthlyDigest, applyAbnDigest,
+    abnMonthlyDigest, scalableMonthlyDigest, applyAbnDigest, categorizeTransaction,
     estimatedPensionBalance, lijfrentePlan,
   };
 });
