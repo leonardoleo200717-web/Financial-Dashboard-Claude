@@ -15,6 +15,6 @@
     "test:all": "node build.js && node tests/run.js && node tests/property.js && node tests/ui-smoke.js && node tests/ui-fuzz.js && node tests/import-render.js && node tests/pwa.js"
   },
   "devDependencies": {
-    "jsdom": "*"
+    "jsdom": "^29.1.1"
   }
 }
