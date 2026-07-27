@@ -132,6 +132,47 @@ t('CJ account digest never computed when filtered to main', () => {
   });
 });
 
+console.log('\n=== Employer-aware salary detection (opts.employerName / employerIban) ===');
+{
+  const IBAN_ASML = 'NL26CITI0000000001';
+  const IBAN_REFUND = 'NL99ABNA0000000888';
+  // Same month: a one-off refund (bigger amount) lands right before payday,
+  // and the real (smaller) ASML paycheck lands on payday itself. Without
+  // employer awareness the plain "largest amount wins" heuristic picks the
+  // refund as "salary" — wrong.
+  const fx = tsv([
+    ['111', 'EUR', '20260124', '20260124', '2000.00', '9000.00', '7000.00', 'SEPA Overboeking                 IBAN: ' + IBAN_REFUND + '        Naam: Rimborso viaggio grande'],
+    ['111', 'EUR', '20260125', '20260125', '9000.00', '13455.21', '4455.21', 'SEPA Overboeking                 IBAN: ' + IBAN_ASML + '        Naam: ASML Netherlands B.V.'],
+  ]);
+  const rws = E.parseABNStatement(fx);
+
+  t('without employer info, the larger unrelated credit wins (the bug)', () => {
+    const d = E.abnMonthlyDigest(rws, { paydayDay: 25, accountNumber: '111', ownIbans: {} });
+    close(d['2026-01'].salary, 7000, 'plain heuristic picks the bigger, wrong credit');
+  });
+
+  t('employerName match wins over a larger amount', () => {
+    const d = E.abnMonthlyDigest(rws, { paydayDay: 25, accountNumber: '111', ownIbans: {}, employerName: 'ASML' });
+    close(d['2026-01'].salary, 4455.21, 'ASML paycheck wins despite being smaller');
+    close(d['2026-01'].otherIncome, 7000, 'the refund is still counted, just not as salary');
+  });
+
+  t('employerIban match wins over a larger amount (no name needed)', () => {
+    const d = E.abnMonthlyDigest(rws, { paydayDay: 25, accountNumber: '111', ownIbans: {}, employerIban: IBAN_ASML });
+    close(d['2026-01'].salary, 4455.21);
+  });
+
+  t('employerName match is case-insensitive', () => {
+    const d = E.abnMonthlyDigest(rws, { paydayDay: 25, accountNumber: '111', ownIbans: {}, employerName: 'asml netherlands' });
+    close(d['2026-01'].salary, 4455.21);
+  });
+
+  t('no employer match anywhere in the window falls back to the amount heuristic', () => {
+    const d = E.abnMonthlyDigest(rws, { paydayDay: 25, accountNumber: '111', ownIbans: {}, employerName: 'Nonexistent Corp' });
+    close(d['2026-01'].salary, 7000, 'no match found — falls back to largest credit');
+  });
+}
+
 console.log('\n=== Category rules (user-defined, persisted) ===');
 t('custom rule wins over built-ins and fallback', () => {
   const rules = [{ match: 'Palestra Sconosciuta', category: 'Sport' }];

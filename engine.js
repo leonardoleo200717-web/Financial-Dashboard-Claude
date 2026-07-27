@@ -693,8 +693,11 @@
      contributes (e.g. common household account). Credits FROM those IBANs
      are the partner's contribution and must be excluded from otherIncome —
      they are not the user's money.
-     Salary heuristic: largest non-own credit within [payday−3, payday+1];
-     always shown in a preview for the user to amend.
+     Salary heuristic: largest non-own credit within [payday−3, payday+1].
+     If opts.employerName (e.g. "ASML") or opts.employerIban is set, a credit
+     matching either wins over a merely-larger amount in the same window — a
+     one-off refund/transfer landing near payday must not steal the slot
+     from the real, smaller paycheck. Always shown in a preview to amend.
      actualExpenses(m): Σ debits in cycle [payday(m−1), payday(m)−1] excluding
      transfers to own IBANs — replaces the residual estimate with bank truth. */
   function abnMonthlyDigest(rows, opts) {
@@ -707,6 +710,10 @@
     // `rows` at all (filter by accountNumber before calling).
     const cjIbans = (opts && opts.cjIbans) || {};
     const categoryRules = (opts && opts.categoryRules) || [];
+    const employerName = opts && opts.employerName ? String(opts.employerName).trim() : '';
+    const employerRe = employerName ? new RegExp(employerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null;
+    const employerIban = opts && opts.employerIban ? String(opts.employerIban).replace(/\s/g, '').toUpperCase() : '';
+    const isEmployer = r => (employerRe && employerRe.test(r.description)) || (employerIban && r.counterIban === employerIban);
     // If the export mixes several accounts, restrict to one.
     if (opts && opts.accountNumber) rows = rows.filter(r => r.account === opts.accountNumber);
     const own = iban => iban && ownIbans[iban] != null;
@@ -714,18 +721,24 @@
     const cj = iban => iban && cjIbans[iban] != null;
     const months = Array.from(new Set(rows.map(r => r.ym))).sort();
     // Pass 1 — identify each month's salary ROW (largest credit near payday,
-    // not from own/shared/CJ). Tracking the row (not the amount) lets pass 2
-    // exclude it from otherIncome of ANY cycle: salary(m−1) lands exactly on
-    // the first day of cycle m and must not appear as "altre entrate" there.
+    // not from own/shared/CJ; an employer-name match wins over a merely-
+    // larger amount). Tracking the row (not the amount) lets pass 2 exclude
+    // it from otherIncome of ANY cycle: salary(m−1) lands exactly on the
+    // first day of cycle m and must not appear as "altre entrate" there.
     const salaryRowByYm = {};
     const salaryRows = new Set();
     months.forEach(ym => {
       const payday = isoDate(ym, paydayDay);
       let best = null;
       rows.forEach(r => {
-        if (r.amount > 0 && !own(r.counterIban) && !shared(r.counterIban) && !cj(r.counterIban)
-          && r.date >= isoAddDays(payday, -3) && r.date <= isoAddDays(payday, 1)
-          && (!best || r.amount > best.amount)) best = r;
+        if (!(r.amount > 0 && !own(r.counterIban) && !shared(r.counterIban) && !cj(r.counterIban)
+          && r.date >= isoAddDays(payday, -3) && r.date <= isoAddDays(payday, 1))) return;
+        if (!best) { best = r; return; }
+        const rMatch = isEmployer(r);
+        const bestMatch = isEmployer(best);
+        if (rMatch && !bestMatch) { best = r; return; }
+        if (bestMatch && !rMatch) return;
+        if (r.amount > best.amount) best = r;
       });
       if (best) { salaryRowByYm[ym] = best; salaryRows.add(best); }
     });
