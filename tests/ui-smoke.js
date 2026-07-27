@@ -430,6 +430,93 @@ async function run() {
     window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
   });
 
+  await t('regression: zero-account dashboard — import must be able to CREATE an account, not silently do nothing', async () => {
+    // This reproduces the reported bug: a user with NO accounts yet opens
+    // Importa and uploads a statement. Before the fix, the "Usa come"
+    // dropdown had nothing but "Ignora"/"CJ" to offer (no accounts existed to
+    // map to), so applyAbnImport() bailed out with importState.abnDigest
+    // still null — the upload reported success, but nothing was ever written,
+    // and every other tab kept showing the "Nessun dato" empty state forever.
+    // Run this LAST: it wipes the demo dataset.
+    const d = window.FD.data;
+    d.accounts.length = 0;
+    d.entries = {}; d.snapshots = {};
+    d.settings.importConfig = { ownIbans: {}, sharedExpenseIbans: {}, salaryIban: '', employerName: '', abnRoles: {}, categoryRules: [] };
+
+    window.FD.go('andamento');
+    if (!document.querySelector('.empty')) throw new Error('expected the empty state with zero accounts/entries');
+
+    window.FD.go('importa');
+    const XLSXW = require('xlsx');
+    const aoa = [
+      ['accountNumber', 'mutationcode', 'transactiondate', 'valuedate', 'startsaldo', 'endsaldo', 'amount', 'description'],
+      [777, 'EUR', 20260201, 20260201, 1000, 900, -100, 'BEA, Google Pay Test Shop'],
+      [777, 'EUR', 20260202, 20260202, 900, 5400, 4500, 'SEPA Overboeking IBAN: NL26CITI0000000001 Naam: ASML Netherlands B.V.'],
+    ];
+    const wsx = XLSXW.utils.aoa_to_sheet(aoa);
+    const wbx = XLSXW.utils.book_new();
+    XLSXW.utils.book_append_sheet(wbx, wsx, 'Sheet0');
+    const xlsBuffer = XLSXW.write(wbx, { type: 'buffer', bookType: 'biff8' });
+    const file = new window.File([new Uint8Array(xlsBuffer)], 'estratto.xls', { type: 'application/vnd.ms-excel' });
+    const input = document.querySelector('#imp-abn-file');
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+    let statusEl = null;
+    for (let i = 0; i < 20; i++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      statusEl = document.querySelector('#imp-abn-status');
+      if (statusEl && statusEl.textContent) break;
+    }
+    if (!statusEl || !/transazioni/.test(statusEl.textContent)) throw new Error('upload/parse did not complete');
+
+    // Also upload a Scalable CSV — this is the exact real-world combination
+    // the user reported ("ho messo e caricato i dati"): with BOTH previews
+    // rendering, an earlier bug (repeated container.innerHTML +=) silently
+    // destroyed the ABN section's event bindings once the Scalable section
+    // rendered after it, leaving "Importa" a dead button.
+    const scalCsv = 'date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency\n' +
+      '2026-02-01;10:00:00;Executed;"D1";"Deposit";Cash;Deposit;;;;500,00;0,00;0,00;EUR';
+    const scalFile = new window.File([scalCsv], 'scalable.csv', { type: 'text/csv' });
+    const scalInput = document.querySelector('#imp-scal-file');
+    Object.defineProperty(scalInput, 'files', { value: [scalFile], configurable: true });
+    scalInput.dispatchEvent(new window.Event('change', { bubbles: true }));
+    let scalStatusEl = null;
+    for (let i = 0; i < 20; i++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      scalStatusEl = document.querySelector('#imp-scal-status');
+      if (scalStatusEl && scalStatusEl.textContent) break;
+    }
+    if (!scalStatusEl || !/transazioni/.test(scalStatusEl.textContent)) throw new Error('Scalable upload/parse did not complete');
+    if (!document.querySelector('.content').textContent.includes('Anteprima Scalable Capital')) throw new Error('Scalable preview section did not render');
+
+    // The mapping table must warn that no accounts exist yet, and offer "+
+    // Crea nuovo conto" as an option (not just Ignora/CJ).
+    const content = document.querySelector('.content');
+    if (!/Non hai ancora nessun conto/.test(content.textContent)) throw new Error('missing "no accounts yet" guidance');
+    const roleSelect = document.querySelector('.imp-role');
+    if (!roleSelect) throw new Error('account mapping <select> not found');
+    if (!Array.from(roleSelect.options).some(o => o.value === 'new')) throw new Error('"+ Crea nuovo conto" option missing');
+
+    // Select it — window.prompt is stubbed to return 'CONFERMA' (see beforeParse).
+    roleSelect.value = 'new';
+    roleSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+    if (d.accounts.length !== 1) throw new Error('account was not created (accounts.length=' + d.accounts.length + ')');
+    if (d.accounts[0].type !== 'current') throw new Error('new account should default to type "current"');
+
+    // Now actually import into the dashboard.
+    const importBtn = document.querySelector('#imp-apply-abn');
+    if (!importBtn) throw new Error('Importa button not found after account creation');
+    importBtn.click();
+
+    if (Object.keys(d.entries).length === 0) throw new Error('applyAbnImport wrote nothing — the core bug is still present');
+
+    window.FD.go('andamento');
+    if (document.querySelector('.empty')) throw new Error('Andamento STILL shows the empty state after a successful import — tabs are not in sync');
+    if (!document.querySelector('.content canvas')) throw new Error('no charts rendered after import');
+  });
+
   await t('no console.error / uncaught errors during smoke', () => {
     if (errors.length) throw new Error(errors.join('\n      '));
   });
