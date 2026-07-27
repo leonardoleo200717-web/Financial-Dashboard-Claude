@@ -719,7 +719,9 @@
   function extractIban(description) {
     // Uppercase-only body (no /i): ABN prints IBANs unspaced in caps; a
     // case-insensitive class would swallow following lowercase words.
-    const m = String(description || '').match(/IBAN[:\s]*([A-Z]{2}\d{2}[A-Z0-9]{6,30})/);
+    // Two formats: classic "IBAN: NL12..." and (from apr-2026 exports)
+    // structured "/TRTP/SEPA OVERBOEKING/IBAN/NL12.../BIC/...".
+    const m = String(description || '').match(/IBAN[:\s\/]*([A-Z]{2}\d{2}[A-Z0-9]{6,30})/);
     return m ? m[1] : null;
   }
 
@@ -746,7 +748,7 @@
     return rows;
   }
 
-  // → [{date, ym, status, description, assetType, type, isin, amount, fee}]
+  // → [{date, ym, status, reference, description, assetType, type, isin, amount, fee}]
   function parseScalableCSV(text) {
     const lines = String(text || '').split(/\r?\n/).filter(l => l.trim());
     if (!lines.length) return [];
@@ -758,13 +760,75 @@
       const date = ymdToIso(c[0]);
       if (!date) return;
       out.push({
-        date, ym: date.slice(0, 7), status: c[2], description: c[4],
+        date, ym: date.slice(0, 7), status: c[2], reference: c[3] || null, description: c[4],
         assetType: c[5], type: c[6], isin: c[7] || null,
         amount: parseAmount(c[10]), fee: parseAmount(c[11]),
       });
     });
     return out.filter(r => r.status === 'Executed')
       .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  }
+
+  // Counterparty name from an ABN description: classic "Naam: G OTTOBONI ..."
+  // or structured "/TRTP/.../NAME/WTC Brands/..." (export format from apr-2026).
+  function extractCounterparty(desc) {
+    let m = String(desc || '').match(/Naam:\s*(.+?)(?=\s{2,}|\s*(?:Machtiging|Kenmerk|Omschrijving|IBAN|BIC):|$)/);
+    if (m) return m[1].trim();
+    m = String(desc || '').match(/\/NAME\/([^\/]+)/);
+    return m ? m[1].trim() : null;
+  }
+
+  /* An ABN export can contain SEVERAL accounts (main + joint + savings).
+     Summarize each with a guessed role so the UI can map them:
+     - 'main'    → receives the salary (opts.salaryMatch, default /ASML/)
+     - 'cj'      → joint account: ≥2 distinct persons paying in repeatedly
+     - 'savings' → few movements, credit interest lines
+     - 'unknown' → let the user decide. */
+  function abnAccountsInStatement(rows, opts) {
+    const salaryMatch = (opts && opts.salaryMatch) || /ASML/i;
+    const by = {};
+    rows.forEach(r => { (by[r.account] = by[r.account] || []).push(r); });
+    return Object.entries(by).map(([account, rs]) => {
+      const credits = rs.filter(r => r.amount > 0);
+      const hasSalary = credits.some(r => salaryMatch.test(r.description));
+      const payerCounts = {};
+      credits.forEach(r => {
+        const p = extractCounterparty(r.description);
+        if (p) payerCounts[p] = (payerCounts[p] || 0) + 1;
+      });
+      const recurringPayers = Object.keys(payerCounts).filter(p => payerCounts[p] >= 2);
+      const hasInterest = rs.some(r => /CREDIT INTEREST/i.test(r.description));
+      let role = 'unknown';
+      if (hasSalary) role = 'main';
+      else if (recurringPayers.length >= 2) role = 'cj';
+      else if (rs.length <= 25 && hasInterest) role = 'savings';
+      // The own IBAN embeds the account number (NL43ABNA0124103138 ⊃ 124103138):
+      // recover it from any counter-IBAN seen anywhere in the export.
+      let iban = null;
+      for (const r of rows) {
+        if (r.counterIban && r.counterIban.indexOf(account) >= 0) { iban = r.counterIban; break; }
+      }
+      return {
+        account, iban, role, txCount: rs.length,
+        from: rs[0].date, to: rs[rs.length - 1].date,
+        lastBalance: rs[rs.length - 1].end,
+        payers: Object.keys(payerCounts),
+      };
+    });
+  }
+
+  /* §7.4 coherence check: per account, endsaldo of the last row must equal
+     startsaldo of the first row + Σ amounts. A mismatch means the export is
+     incomplete (missing rows) and balances/expenses would be wrong. */
+  function abnValidateContinuity(rows) {
+    const by = {};
+    rows.forEach(r => { (by[r.account] = by[r.account] || []).push(r); });
+    return Object.entries(by).map(([account, rs]) => {
+      const sum = rs.reduce((s, r) => s + r.amount, 0);
+      const expected = r2(rs[0].start + sum);
+      const actual = r2(rs[rs.length - 1].end);
+      return { account, ok: Math.abs(expected - actual) < 0.02, expected, actual, diff: r2(actual - expected) };
+    });
   }
 
   // Balance at end of a given ISO date = endsaldo of the last row on/before it.
@@ -800,9 +864,34 @@
     const paydayDay = (opts && opts.paydayDay) || 25;
     const ownIbans = (opts && opts.ownIbans) || {};
     const sharedExpenseIbans = (opts && opts.sharedExpenseIbans) || {};
+    // Joint-account (CJ) IBANs: debits TO them are a real expense ("Spese
+    // condivise" — §3 opzione A); credits FROM them are residual/closure moves,
+    // never income. All transactions ON the CJ account itself must not be in
+    // `rows` at all (filter by accountNumber before calling).
+    const cjIbans = (opts && opts.cjIbans) || {};
+    const categoryRules = (opts && opts.categoryRules) || [];
+    // If the export mixes several accounts, restrict to one.
+    if (opts && opts.accountNumber) rows = rows.filter(r => r.account === opts.accountNumber);
     const own = iban => iban && ownIbans[iban] != null;
     const shared = iban => iban && sharedExpenseIbans[iban] != null;
+    const cj = iban => iban && cjIbans[iban] != null;
     const months = Array.from(new Set(rows.map(r => r.ym))).sort();
+    // Pass 1 — identify each month's salary ROW (largest credit near payday,
+    // not from own/shared/CJ). Tracking the row (not the amount) lets pass 2
+    // exclude it from otherIncome of ANY cycle: salary(m−1) lands exactly on
+    // the first day of cycle m and must not appear as "altre entrate" there.
+    const salaryRowByYm = {};
+    const salaryRows = new Set();
+    months.forEach(ym => {
+      const payday = isoDate(ym, paydayDay);
+      let best = null;
+      rows.forEach(r => {
+        if (r.amount > 0 && !own(r.counterIban) && !shared(r.counterIban) && !cj(r.counterIban)
+          && r.date >= isoAddDays(payday, -3) && r.date <= isoAddDays(payday, 1)
+          && (!best || r.amount > best.amount)) best = r;
+      });
+      if (best) { salaryRowByYm[ym] = best; salaryRows.add(best); }
+    });
     const out = {};
     months.forEach(ym => {
       const payday = isoDate(ym, paydayDay);
@@ -810,12 +899,7 @@
       const prevPayday = isoDate(prevYmVal, paydayDay);
       const balancePayday = abnBalanceAt(rows, payday);
       const balancePaydayMinus1 = abnBalanceAt(rows, isoAddDays(payday, -1));
-      // salary: largest credit near payday not from an own/shared account
-      let salary = 0;
-      rows.forEach(r => {
-        if (r.amount > salary && !own(r.counterIban) && !shared(r.counterIban)
-          && r.date >= isoAddDays(payday, -3) && r.date <= isoAddDays(payday, 1)) salary = r.amount;
-      });
+      const salary = salaryRowByYm[ym] ? salaryRowByYm[ym].amount : 0;
       // own-account transfers dated in this calendar month
       const transfers = rows.filter(r => r.ym === ym && own(r.counterIban)).map(r => ({
         date: r.date, amount: r2(Math.abs(r.amount)),
@@ -823,28 +907,27 @@
         counterAccountId: ownIbans[r.counterIban],
       }));
       // actual spending over the cycle prevPayday … payday−1
-      let spent = 0, otherIncome = 0, partnerContributions = 0;
+      let spent = 0, otherIncome = 0, partnerContributions = 0, cjReturns = 0;
       const categories = {};
       rows.forEach(r => {
         if (r.date >= prevPayday && r.date < payday) {
           if (r.amount < 0 && !own(r.counterIban)) {
             spent += -r.amount;
-            const cat = categorizeTransaction(r.description);
+            const cat = cj(r.counterIban) ? 'Spese condivise'
+              : categorizeTransaction(r.description, categoryRules);
             categories[cat] = (categories[cat] || 0) + (-r.amount);
           }
-          if (r.amount > 0 && !own(r.counterIban) && r.amount !== salary) {
-            if (shared(r.counterIban)) {
-              partnerContributions += r.amount;
-            } else {
-              otherIncome += r.amount;
-            }
+          if (r.amount > 0 && !own(r.counterIban) && !salaryRows.has(r)) {
+            if (cj(r.counterIban)) cjReturns += r.amount;          // residuo/chiusura CJ: mai income
+            else if (shared(r.counterIban)) partnerContributions += r.amount;
+            else otherIncome += r.amount;
           }
         }
       });
       out[ym] = {
         ym, balancePayday, balancePaydayMinus1,
         salary: r2(salary), otherIncome: r2(otherIncome),
-        partnerContributions: r2(partnerContributions),
+        partnerContributions: r2(partnerContributions), cjReturns: r2(cjReturns),
         actualExpenses: r2(spent), transfers,
         categories: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, r2(v)])),
       };
@@ -853,9 +936,17 @@
     return out;
   }
 
-  function categorizeTransaction(desc) {
+  /* Category from an ABN description. `rules` (user-defined, persisted in
+     settings) win over the built-ins: [{match: "N26"|"NL97...", category}] —
+     case-insensitive substring match on the full description. Unmatched plain
+     SEPA transfers fall back to "Da classificare" so the UI can offer the user
+     a way to classify them (and save a rule for future imports). */
+  function categorizeTransaction(desc, rules) {
     if (!desc) return 'Altro';
     const d = desc.toUpperCase();
+    for (const r of (rules || [])) {
+      if (r && r.match && d.indexOf(String(r.match).toUpperCase()) >= 0) return r.category;
+    }
     if (/ALBERT HEIJN|AH TO GO|JUMBO|LIDL|ALDI|PLUS |SPAR |DIRK|COOP /i.test(d)) return 'Spesa alimentare';
     if (/THUISBEZORGD|UBER\s*EATS|DELIVEROO|DOMINOS|MCDONALDS/i.test(d)) return 'Food delivery';
     if (/RISTORANTE|RESTAURANT|CAFE|COFFEE|STARBUCKS|BAR /i.test(d)) return 'Ristoranti e bar';
@@ -867,8 +958,10 @@
     if (/ANWB|VERZEKER|ABN AMRO SCHADEV/i.test(d)) return 'Assicurazioni';
     if (/GEMEENTE|BELASTING/i.test(d)) return 'Tasse e imposte';
     if (/SPORT|GYM|BOULDE|ATLETIEK|FITNESS/i.test(d)) return 'Sport';
-    if (/TIKKIE/i.test(d)) return 'Tikkie';
+    if (/TIKKIE/i.test(d)) return 'Condivise/partner';
     if (/SEPA\s+INCASSO/i.test(d)) return 'Incassi automatici';
+    // plain bank transfer to an unknown counterparty → let the user decide
+    if (/SEPA\s+OVERBOEKING/i.test(d)) return 'Da classificare';
     return 'Altro';
   }
 
@@ -877,18 +970,29 @@
      Used to corroborate/fill contributions — the ABN side is authoritative
      for transfers to avoid double counting. */
   function scalableMonthlyDigest(rows) {
+    // A cash Distribution that shares its reference with a Security-side
+    // Corporate action is a PRINCIPAL repayment (e.g. iBonds maturity):
+    // internal asset→cash, NOT dividend income (§6 FLUSSI_CONTI).
+    const caRefs = new Set(rows
+      .filter(r => r.assetType !== 'Cash' && r.type === 'Corporate action' && r.reference)
+      .map(r => r.reference));
     const out = {};
     rows.forEach(r => {
-      const o = out[r.ym] || (out[r.ym] = { ym: r.ym, deposits: 0, withdrawals: 0, fees: 0, interest: 0, dividends: 0 });
+      const o = out[r.ym] || (out[r.ym] = { ym: r.ym, deposits: 0, withdrawals: 0, fees: 0, interest: 0, dividends: 0, maturities: 0 });
       if (r.assetType === 'Cash') {
         if (r.type === 'Deposit') o.deposits += r.amount;
         else if (r.type === 'Withdrawal' || r.type === 'Cash Transfer Out') o.withdrawals += Math.abs(r.amount);
         else if (r.type === 'Fee') o.fees += Math.abs(r.amount);
         else if (r.type === 'Interest') o.interest += r.amount;
-        else if (r.type === 'Distribution') o.dividends += r.amount;
+        else if (r.type === 'Distribution') {
+          if (r.reference && caRefs.has(r.reference)) o.maturities += r.amount;
+          else o.dividends += r.amount;  // CANCEL-* rows are negative and net out here
+        }
       }
+      // 'Security transfer' (migrazione titoli in natura) e 'Corporate action'
+      // lato Security non sono flussi di cassa: ignorati per costruzione.
     });
-    Object.values(out).forEach(o => ['deposits', 'withdrawals', 'fees', 'interest', 'dividends'].forEach(k => o[k] = r2(o[k])));
+    Object.values(out).forEach(o => ['deposits', 'withdrawals', 'fees', 'interest', 'dividends', 'maturities'].forEach(k => o[k] = r2(o[k])));
     return out;
   }
 
@@ -898,6 +1002,7 @@
      month+amount+counterAccount). Returns a change log for the preview. */
   function applyAbnDigest(data, digest, currentAccountId, opts) {
     const overwrite = !!(opts && opts.overwrite);
+    const balancesOnly = !!(opts && opts.balancesOnly); // savings/other accounts: only snapshots
     const log = [];
     Object.values(digest).forEach(mo => {
       const ym = mo.ym;
@@ -906,6 +1011,7 @@
       if (mo.balancePayday != null && (overwrite || snap.balancePayday == null)) { snap.balancePayday = mo.balancePayday; log.push(ym + ': saldo payday ' + mo.balancePayday); }
       if (mo.balancePaydayMinus1 != null && (overwrite || snap.balancePaydayMinus1 == null)) { snap.balancePaydayMinus1 = mo.balancePaydayMinus1; }
       data.snapshots[key] = snap;
+      if (balancesOnly) return;
       const entry = data.entries[ym] || {
         yearMonth: ym, salaryNet: 0, extraSalary: 0, otherIncome: 0,
         paydayDayOfMonth: (data.settings && data.settings.defaultPaydayDayOfMonth) || 25,
@@ -1385,7 +1491,8 @@
     // FIRE simulator (asset-class, real €)
     fireClassTotals, simulateFireDeterministic, coastFireAge, monteCarloFire,
     // statement import + pension estimate + lijfrente planner
-    parseAmount, ymdToIso, extractIban, parseABNStatement, parseScalableCSV,
+    parseAmount, ymdToIso, extractIban, extractCounterparty, parseABNStatement, parseScalableCSV,
+    abnAccountsInStatement, abnValidateContinuity,
     abnMonthlyDigest, scalableMonthlyDigest, applyAbnDigest, categorizeTransaction,
     estimatedPensionBalance, lijfrentePlan,
   };
@@ -2908,7 +3015,10 @@
     uploadBody.querySelector('#imp-abn-zone').onclick = (e) => { if (e.target.tagName !== 'INPUT') abnFileInput.click(); };
     uploadBody.querySelector('#imp-scal-zone').onclick = (e) => { if (e.target.tagName !== 'INPUT') scalFileInput.click(); };
 
-    importState = importState || { abnRows: null, scalRows: null, abnDigest: null, scalDigest: null, edits: {} };
+    importState = importState || {
+      abnRows: null, abnAccounts: null, continuity: null, mainAbnAccount: null,
+      balanceDigests: {}, scalRows: null, abnDigest: null, scalDigest: null, edits: {},
+    };
 
     abnFileInput.onchange = function () {
       const file = this.files[0]; if (!file) return;
@@ -2917,14 +3027,15 @@
         try {
           const text = reader.result;
           importState.abnRows = E.parseABNStatement(text);
-          if (!importState.abnRows.length) throw new Error('Nessuna riga valida trovata');
-          importState.abnDigest = E.abnMonthlyDigest(importState.abnRows, {
-            paydayDay: data.settings.defaultPaydayDayOfMonth || 25,
-            ownIbans: imp.ownIbans,
-            sharedExpenseIbans: imp.sharedExpenseIbans,
-          });
+          if (!importState.abnRows.length) throw new Error('Nessuna riga valida trovata (per gli XLS binari: esporta come TXT/TSV, oppure apri in Excel e salva come testo)');
+          // Un export ABN può contenere PIÙ conti (main + congiunto + savings):
+          // rilevali, proponi una mappatura, e calcola il digest solo sul main.
+          importState.abnAccounts = E.abnAccountsInStatement(importState.abnRows);
+          importState.continuity = E.abnValidateContinuity(importState.abnRows);
+          autoMapAbnRoles();
+          recomputeAbnDigest();
           importState.edits = {};
-          uploadBody.querySelector('#imp-abn-status').innerHTML = `<span style="color:var(--pos)">✓ ${importState.abnRows.length} transazioni caricate</span>`;
+          uploadBody.querySelector('#imp-abn-status').innerHTML = `<span style="color:var(--pos)">✓ ${importState.abnRows.length} transazioni, ${importState.abnAccounts.length} conti rilevati</span>`;
           renderPreview(uploadBody.querySelector('#imp-preview'), main);
         } catch (e) { uploadBody.querySelector('#imp-abn-status').innerHTML = `<span style="color:var(--neg)">✗ ${escapeHtml(e.message)}</span>`; }
       };
@@ -2947,7 +3058,8 @@
     };
 
     // If we already have data from before re-render, show preview
-    if (importState.abnDigest || importState.scalDigest) {
+    if (importState.abnRows || importState.scalDigest) {
+      if (importState.abnRows) { autoMapAbnRoles(); recomputeAbnDigest(); }
       renderPreview(uploadBody.querySelector('#imp-preview'), main);
     }
 
@@ -2957,17 +3069,137 @@
     }
   }
 
+  /* Ruoli dei conti ABN rilevati nell'export. Persistiti per numero conto in
+     settings.importConfig.abnRoles = { accNumber: {kind:'own'|'cj'|'ignore',
+     accountId?} } — così un futuro export con un conto nuovo (o archiviato)
+     ripropone solo quello da mappare. */
+  function autoMapAbnRoles() {
+    const imp = data.settings.importConfig;
+    const roles = imp.abnRoles || (imp.abnRoles = {});
+    (importState.abnAccounts || []).forEach(a => {
+      if (roles[a.account]) return; // già mappato dall'utente
+      if (a.role === 'main') {
+        const cur = data.accounts.find(x => x.type === 'current' && !x.archivedAt);
+        roles[a.account] = cur ? { kind: 'own', accountId: cur.id } : { kind: 'ignore' };
+      } else if (a.role === 'cj') {
+        roles[a.account] = { kind: 'cj' };
+      } else if (a.role === 'savings') {
+        const sav = data.accounts.find(x => x.type === 'savings' && !x.archivedAt && /abn/i.test(x.name));
+        roles[a.account] = sav ? { kind: 'own', accountId: sav.id } : { kind: 'ignore' };
+      } else {
+        roles[a.account] = { kind: 'ignore' };
+      }
+    });
+    save();
+  }
+
+  // Ricalcola i digest rispettando la mappatura: digest completo solo sul conto
+  // main; balances-only per gli altri conti propri; i conti CJ vengono esclusi
+  // (i bonifici Leonardo→CJ diventano spesa "Spese condivise" via cjIbans).
+  function recomputeAbnDigest() {
+    const imp = data.settings.importConfig;
+    const roles = imp.abnRoles || {};
+    const accounts = importState.abnAccounts || [];
+    // own IBANs: configurati a mano + derivati dalla mappatura dell'export
+    const ownIbans = Object.assign({}, imp.ownIbans);
+    const cjIbans = Object.assign({}, imp.cjIbans || {});
+    accounts.forEach(a => {
+      const r = roles[a.account];
+      if (r && r.kind === 'own' && a.iban) ownIbans[a.iban] = r.accountId;
+      if (r && r.kind === 'cj' && a.iban) cjIbans[a.iban] = a.account;
+    });
+    const digestOpts = {
+      paydayDay: data.settings.defaultPaydayDayOfMonth || 25,
+      ownIbans, cjIbans,
+      sharedExpenseIbans: imp.sharedExpenseIbans,
+      categoryRules: imp.categoryRules || [],
+    };
+    const curAcct = data.accounts.find(a => a.type === 'current' && !a.archivedAt);
+    const mainAcc = accounts.find(a => {
+      const r = roles[a.account];
+      return r && r.kind === 'own' && curAcct && r.accountId === curAcct.id;
+    });
+    importState.mainAbnAccount = mainAcc ? mainAcc.account : null;
+    importState.abnDigest = mainAcc
+      ? E.abnMonthlyDigest(importState.abnRows, Object.assign({ accountNumber: mainAcc.account }, digestOpts))
+      : null;
+    // conti propri non-main → solo saldi
+    importState.balanceDigests = {};
+    accounts.forEach(a => {
+      const r = roles[a.account];
+      if (r && r.kind === 'own' && (!mainAcc || a.account !== mainAcc.account)) {
+        importState.balanceDigests[r.accountId] =
+          E.abnMonthlyDigest(importState.abnRows, Object.assign({ accountNumber: a.account }, digestOpts));
+      }
+    });
+  }
+
+  // Categorie disponibili per la riclassificazione manuale.
+  const EXPENSE_CATEGORIES = ['Affitto/casa', 'Spesa alimentare', 'Utenze', 'Trasporti e viaggi',
+    'Ristoranti e bar', 'Food delivery', 'Salute', 'Sport', 'Abbonamenti', 'Assicurazioni',
+    'Tasse e imposte', 'Spese condivise', 'Condivise/partner', 'Viaggi/varie (N26)',
+    'Costi investimento', 'Incassi automatici', 'Altro'];
+
   function renderPreview(container, main) {
     container.innerHTML = '';
-    if (!importState.abnDigest && !importState.scalDigest) return;
+    if (!importState.abnRows && !importState.scalDigest) return;
 
-    // --- ABN Preview ---
+    // --- Mappatura conti ABN ---
+    if (importState.abnAccounts && importState.abnAccounts.length) {
+      const roles = data.settings.importConfig.abnRoles || {};
+      const contById = {};
+      (importState.continuity || []).forEach(c => { contById[c.account] = c; });
+      const roleLabel = { main: 'principale (stipendio)', cj: 'congiunto (2 intestatari)', savings: 'risparmio', unknown: '?' };
+      let html = `<h3 style="margin:12px 0 8px">Conti rilevati nell'export</h3>
+        <p class="muted small">Mappa ogni conto: i conti propri entrano nella dashboard, il conto congiunto (CJ) viene escluso — i tuoi bonifici verso di esso contano come "Spese condivise", i movimenti di chiunque altro vengono ignorati. Se in futuro apri o archivi un conto, riappare qui da mappare.</p>
+        <div style="overflow-x:auto"><table class="data-table" style="width:100%">
+        <tr><th>Conto</th><th>Periodo</th><th>Righe</th><th>Rilevato come</th><th>Usa come</th><th>Continuità saldi</th></tr>`;
+      importState.abnAccounts.forEach(a => {
+        const r = roles[a.account] || { kind: 'ignore' };
+        const cont = contById[a.account];
+        const opts = [
+          `<option value="ignore" ${r.kind === 'ignore' ? 'selected' : ''}>Ignora</option>`,
+          `<option value="cj" ${r.kind === 'cj' ? 'selected' : ''}>Conto congiunto (CJ)</option>`,
+        ].concat(data.accounts.map(acc =>
+          `<option value="own:${acc.id}" ${r.kind === 'own' && r.accountId === acc.id ? 'selected' : ''}>${escapeHtml(acc.name)}${acc.archivedAt ? ' (archiviato)' : ''}</option>`));
+        html += `<tr>
+          <td><code>${escapeHtml(a.account)}</code>${a.iban ? `<br><span class="muted small">${escapeHtml(a.iban)}</span>` : ''}</td>
+          <td class="small">${a.from} → ${a.to}</td>
+          <td>${a.txCount}</td>
+          <td><span class="badge">${roleLabel[a.role] || a.role}</span></td>
+          <td><select class="imp-role" data-acc="${escapeHtml(a.account)}">${opts.join('')}</select></td>
+          <td>${cont ? (cont.ok ? '<span style="color:var(--pos)">✓</span>' : `<span style="color:var(--neg)" title="atteso ${cont.expected}, trovato ${cont.actual}">⚠ Δ ${fmt(cont.diff)} — export incompleto?</span>`) : '—'}</td>
+        </tr>`;
+      });
+      html += '</table></div>';
+      container.innerHTML += html;
+      container.querySelectorAll('.imp-role').forEach(sel => {
+        sel.onchange = () => {
+          const v = sel.value;
+          const roles2 = data.settings.importConfig.abnRoles;
+          roles2[sel.dataset.acc] = v === 'ignore' ? { kind: 'ignore' }
+            : v === 'cj' ? { kind: 'cj' }
+            : { kind: 'own', accountId: v.slice(4) };
+          save(); recomputeAbnDigest(); renderPreview(container, main);
+        };
+      });
+    }
+
+    // --- ABN Preview (solo conto principale) ---
     if (importState.abnDigest) {
       const months = Object.keys(importState.abnDigest).sort();
-      let html = `<h3 style="margin:12px 0 8px">Anteprima ABN AMRO</h3>
-        <p class="muted small">Modifica i valori prima di importare. I campi evidenziati sovrascriveranno dati esistenti.</p>
-        <div style="overflow-x:auto"><table class="data-table" style="width:100%">
-        <tr><th>Mese</th><th>Saldo payday</th><th>Saldo g-1</th><th>Stipendio</th><th>Altre entrate</th><th>Contrib. partner</th><th>Spese reali</th><th>Trasfer.</th><th>Note</th></tr>`;
+      // §7.2 — no income fantasma: entrate ≈ stipendio + interessi + dividendi.
+      const phantom = months.filter(ym => {
+        const d = importState.abnDigest[ym];
+        return !d.partial && d.otherIncome > 1000;
+      });
+      let html = `<h3 style="margin:16px 0 8px">Anteprima conto principale</h3>
+        <p class="muted small">Modifica i valori prima di importare. "Escluse" = contributi del partner e rientri dal conto congiunto (mai contati come tuo reddito).</p>`;
+      if (phantom.length) {
+        html += `<p class="small" style="color:var(--neg)">⚠ Possibile reddito fantasma (altre entrate &gt; € 1.000) in: ${phantom.map(E.monthLabelIT).join(', ')} — controlla se sono rientri da broker/conti non mappati.</p>`;
+      }
+      html += `<div style="overflow-x:auto"><table class="data-table" style="width:100%">
+        <tr><th>Mese</th><th>Saldo payday</th><th>Saldo g-1</th><th>Stipendio</th><th>Altre entrate</th><th>Escluse</th><th>Spese reali</th><th>Trasfer.</th><th>Note</th></tr>`;
       months.forEach(ym => {
         const d = importState.abnDigest[ym];
         const edits = importState.edits[ym] || {};
@@ -2984,7 +3216,7 @@
           <td${cellCls()}><input type="number" class="imp-edit" data-ym="${ym}" data-field="balancePaydayMinus1" value="${edits.balancePaydayMinus1 != null ? edits.balancePaydayMinus1 : (d.balancePaydayMinus1 != null ? d.balancePaydayMinus1 : '')}" style="width:90px"></td>
           <td${cellCls()}><input type="number" class="imp-edit" data-ym="${ym}" data-field="salary" value="${edits.salary != null ? edits.salary : d.salary}" style="width:90px"></td>
           <td><span class="muted">${fmt(d.otherIncome)}</span></td>
-          <td><span class="muted">${d.partnerContributions ? fmt(d.partnerContributions) : '—'}</span></td>
+          <td><span class="muted" title="Contributi partner + rientri dal conto congiunto">${(d.partnerContributions || d.cjReturns) ? fmt(E.r2((d.partnerContributions || 0) + (d.cjReturns || 0))) : '—'}</span></td>
           <td${d.partial ? ' class="muted"' : ''}><input type="number" class="imp-edit" data-ym="${ym}" data-field="actualExpenses" value="${edits.actualExpenses != null ? edits.actualExpenses : d.actualExpenses}" style="width:90px"${d.partial ? ' disabled title="Ciclo parziale — dato incompleto"' : ''}></td>
           <td><span class="muted">${d.transfers.length || '—'}</span></td>
           <td>${hasExisting ? '<span class="badge" title="Dati manuali esistenti per questo mese">esistente</span>' : '<span class="badge liq">nuovo</span>'}</td>
@@ -3012,14 +3244,19 @@
       const mergeBtn = container.querySelector('#imp-apply-merge');
       if (applyBtn) applyBtn.onclick = () => applyAbnImport(true);
       if (mergeBtn) mergeBtn.onclick = () => applyAbnImport(false);
+
+      renderReclassify(container, main);
+    } else if (importState.abnAccounts && importState.abnAccounts.length) {
+      container.innerHTML += `<p class="small" style="color:var(--neg)">⚠ Nessun conto dell'export è mappato sul tuo conto corrente della dashboard: seleziona "Usa come" qui sopra per calcolare stipendio e spese.</p>`;
     }
 
     // --- Scalable Preview ---
     if (importState.scalDigest) {
       const months = Object.keys(importState.scalDigest).sort();
       let html = `<h3 style="margin:16px 0 8px">Anteprima Scalable Capital</h3>
+        <p class="muted small">"Rimborsi" = scadenze obbligazionarie (es. iBonds): capitale che torna cash, non è un dividendo. I trasferimenti titoli in natura (cambio mercato / migrazione da altri broker) non sono flussi e non compaiono.</p>
         <div style="overflow-x:auto"><table class="data-table" style="width:100%">
-        <tr><th>Mese</th><th>Depositi</th><th>Prelievi</th><th>Commissioni</th><th>Interessi</th><th>Dividendi</th><th>Netto</th></tr>`;
+        <tr><th>Mese</th><th>Depositi</th><th>Prelievi</th><th>Commissioni</th><th>Interessi</th><th>Dividendi</th><th>Rimborsi</th><th>Netto</th></tr>`;
       months.forEach(ym => {
         const d = importState.scalDigest[ym];
         const net = E.r2(d.deposits - d.withdrawals);
@@ -3030,6 +3267,7 @@
           <td class="muted">${fmt(d.fees)}</td>
           <td class="muted">${d.interest ? fmt(d.interest) : '—'}</td>
           <td class="muted">${d.dividends ? fmt(d.dividends) : '—'}</td>
+          <td class="muted">${d.maturities ? fmt(d.maturities) : '—'}</td>
           <td><b>${fmt(net)}</b></td>
         </tr>`;
       });
@@ -3038,10 +3276,79 @@
     }
   }
 
+  /* Spese non chiare → l'utente assegna la categoria; la scelta diventa una
+     regola persistente (match sulla controparte) riapplicata ai futuri import. */
+  function renderReclassify(container, main) {
+    if (!importState.abnRows || !importState.mainAbnAccount) return;
+    const imp = data.settings.importConfig;
+    const rules = imp.categoryRules || (imp.categoryRules = []);
+    const ownIbans = {}; const cjIbans = {};
+    (importState.abnAccounts || []).forEach(a => {
+      const r = (imp.abnRoles || {})[a.account];
+      if (r && r.kind === 'own' && a.iban) ownIbans[a.iban] = r.accountId;
+      if (r && r.kind === 'cj' && a.iban) cjIbans[a.iban] = a.account;
+    });
+    Object.assign(ownIbans, imp.ownIbans);
+    // gruppo per controparte le uscite del conto main non classificate
+    const groups = {};
+    importState.abnRows.forEach(r => {
+      if (r.account !== importState.mainAbnAccount || r.amount >= 0) return;
+      if (r.counterIban && (ownIbans[r.counterIban] != null || cjIbans[r.counterIban] != null)) return;
+      const cat = E.categorizeTransaction(r.description, rules);
+      if (cat !== 'Da classificare' && cat !== 'Altro') return;
+      const who = E.extractCounterparty(r.description) || r.counterIban || r.description.slice(0, 40);
+      const g = groups[who] || (groups[who] = { who, iban: r.counterIban, n: 0, tot: 0, sample: r.description.slice(0, 90) });
+      g.n++; g.tot += -r.amount;
+    });
+    const list = Object.values(groups).sort((a, b) => b.tot - a.tot).slice(0, 25);
+    let html = `<h3 style="margin:16px 0 8px">Spese da classificare</h3>`;
+    if (!list.length) {
+      html += `<p class="muted small">Tutte le uscite sono classificate ✓${rules.length ? ` (${rules.length} regole personalizzate attive)` : ''}</p>`;
+      container.innerHTML += html; return;
+    }
+    html += `<p class="muted small">Uscite senza categoria certa, raggruppate per controparte. Scegli una categoria: verrà salvata come regola e riapplicata ai prossimi import.</p>
+      <div style="overflow-x:auto"><table class="data-table" style="width:100%">
+      <tr><th>Controparte</th><th>Movimenti</th><th>Totale</th><th>Categoria</th></tr>`;
+    list.forEach((g, i) => {
+      html += `<tr>
+        <td title="${escapeHtml(g.sample)}">${escapeHtml(g.who)}${g.iban ? `<br><span class="muted small">${escapeHtml(g.iban)}</span>` : ''}</td>
+        <td>${g.n}</td><td>${fmt(E.r2(g.tot))}</td>
+        <td><select class="imp-cat" data-idx="${i}"><option value="">— scegli —</option>${EXPENSE_CATEGORIES.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select></td>
+      </tr>`;
+    });
+    html += '</table></div>';
+    if (rules.length) {
+      html += `<details style="margin-top:8px"><summary class="small">Regole salvate (${rules.length})</summary>` +
+        rules.map((r, i) => `<div class="form-row small"><code>${escapeHtml(r.match)}</code> → ${escapeHtml(r.category)} <button class="link neg imp-rule-del" data-i="${i}">×</button></div>`).join('') +
+        '</details>';
+    }
+    container.innerHTML += html;
+    container.querySelectorAll('.imp-cat').forEach(sel => {
+      sel.onchange = () => {
+        if (!sel.value) return;
+        const g = list[parseInt(sel.dataset.idx, 10)];
+        // match sull'IBAN quando c'è (più stabile), altrimenti sul nome
+        rules.push({ match: g.iban || g.who, category: sel.value });
+        save(); recomputeAbnDigest();
+        renderPreview(container.closest('#imp-preview') || container, main);
+      };
+    });
+    container.querySelectorAll('.imp-rule-del').forEach(b => {
+      b.onclick = () => {
+        rules.splice(parseInt(b.dataset.i, 10), 1);
+        save(); recomputeAbnDigest();
+        renderPreview(container.closest('#imp-preview') || container, main);
+      };
+    });
+  }
+
   function applyAbnImport(overwrite) {
     if (!importState.abnDigest) return;
-    const curAcct = data.accounts.find(a => a.type === 'current' && !a.archivedAt);
-    if (!curAcct) { alert('Nessun conto corrente attivo trovato'); return; }
+    const imp = data.settings.importConfig;
+    const roles = imp.abnRoles || {};
+    const mainRole = roles[importState.mainAbnAccount];
+    const curAcct = mainRole && E.accountById(data, mainRole.accountId);
+    if (!curAcct) { alert('Nessun conto corrente mappato'); return; }
 
     // Apply edits to digest before importing
     const digest = JSON.parse(JSON.stringify(importState.abnDigest));
@@ -3050,6 +3357,12 @@
     });
 
     const log = E.applyAbnDigest(data, digest, curAcct.id, { overwrite });
+    // altri conti propri (savings…): solo saldi
+    Object.entries(importState.balanceDigests || {}).forEach(([accId, dg]) => {
+      const acc = E.accountById(data, accId);
+      const sublog = E.applyAbnDigest(data, dg, accId, { overwrite, balancesOnly: true });
+      sublog.forEach(l => log.push((acc ? acc.name : accId) + ' — ' + l));
+    });
     save();
     const msg = overwrite
       ? `Importati ${log.length} valori (sovrascrittura abilitata).`
@@ -3183,12 +3496,14 @@
       });
     }
 
-    // Source 2: if we still have abnRows, re-categorize all rows
-    if (!hasCategoryData && importState && importState.abnRows) {
+    // Source 2: re-categorize the raw rows — ONLY the mapped main account
+    // (mescolare i conti gonfierebbe le categorie con i movimenti CJ/savings).
+    if (!hasCategoryData && importState && importState.abnRows && importState.mainAbnAccount) {
+      const rules = (data.settings.importConfig && data.settings.importConfig.categoryRules) || [];
       hasCategoryData = true;
       importState.abnRows.forEach(r => {
-        if (r.amount < 0) {
-          const cat = E.categorizeTransaction(r.description);
+        if (r.account === importState.mainAbnAccount && r.amount < 0) {
+          const cat = E.categorizeTransaction(r.description, rules);
           catTotals[cat] = (catTotals[cat] || 0) + (-r.amount);
         }
       });
