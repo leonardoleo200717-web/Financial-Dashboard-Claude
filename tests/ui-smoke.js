@@ -123,6 +123,53 @@ async function run() {
     delete cfg.ownIbans['NL12TEST0000000001'];
   });
 
+  await t('andamento: breakdown card sums the liquid accounts and excludes pensions', () => {
+    window.FD.go('andamento');
+    const txt = document.querySelector('.content').textContent;
+    if (!/Composizione del patrimonio/.test(txt)) throw new Error('breakdown card missing');
+    if (!/Totale liquido/.test(txt)) throw new Error('liquid total row missing');
+    // The demo seed has a pension pot (PME): it must be named as EXCLUDED,
+    // not folded into the headline figure the user compares to their sheet.
+    const d = window.FD.data;
+    const E2 = require(path.join(ROOT, 'engine.js'));
+    const ym = E2.monthSeries(d).slice(-1)[0];
+    const locked = E2.lockedNetWorth(d, ym);
+    if (!(locked > 0)) throw new Error('demo data has no pension pot — test would prove nothing');
+    if (!/escluse<\/b> dal totale|<b>escluse<\/b>/.test(document.querySelector('.content').innerHTML)) {
+      throw new Error('pension exclusion is not stated');
+    }
+    // The headline must equal liquidNetWorth, i.e. pensions really are out.
+    const liquid = E2.liquidNetWorth(d, ym);
+    const shown = E2.fmtEUR(E2.r2(liquid));
+    if (txt.indexOf(shown) === -1) throw new Error('headline is not the liquid net worth (' + shown + ')');
+    if (txt.indexOf(E2.fmtEUR(E2.r2(liquid + locked))) !== -1 && locked > 0) {
+      throw new Error('total-including-pensions is shown as the headline figure');
+    }
+  });
+
+  await t('andamento: duplicated account is flagged as double-counted', () => {
+    const d = window.FD.data;
+    const E2 = require(path.join(ROOT, 'engine.js'));
+    const first = d.accounts.find(a => E2.isLiquid(a));
+    if (!first) throw new Error('no liquid account in demo data');
+    // Clone an existing account (same name) and give it the same balances —
+    // exactly what a repeated import or a re-created account produces.
+    const clone = JSON.parse(JSON.stringify(first));
+    clone.id = 'dup-test-acc';
+    d.accounts.push(clone);
+    Object.keys(d.snapshots).filter(k => k.startsWith(first.id + '|')).forEach(k => {
+      const s = d.snapshots[k];
+      d.snapshots[clone.id + '|' + s.yearMonth] = Object.assign({}, s, { accountId: clone.id });
+    });
+    window.FD.go('andamento');
+    const txt = document.querySelector('.content').textContent;
+    if (!/Conti duplicati/.test(txt)) throw new Error('duplicate account was not flagged');
+    if (txt.indexOf(first.name) === -1) throw new Error('the duplicated name is not named');
+    // cleanup
+    d.accounts = d.accounts.filter(a => a.id !== clone.id);
+    Object.keys(d.snapshots).filter(k => k.startsWith(clone.id + '|')).forEach(k => delete d.snapshots[k]);
+  });
+
   await t('importa: shared expense IBAN config persists', () => {
     window.FD.go('importa');
     const inp = document.querySelector('#imp-new-shared');

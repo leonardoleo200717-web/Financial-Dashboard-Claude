@@ -1908,6 +1908,7 @@ if(xr(e,"index.xml"))throw new Error("Unsupported NUMBERS 09 file");throw new Er
   /* ========================== TAB 1 — Andamento ===================== */
   function renderAndamento(main) {
     const months = E.monthSeries(data);
+    main.appendChild(netWorthBreakdownCard());
     const grid = el('div', 'grid');
     main.appendChild(grid);
 
@@ -1925,6 +1926,49 @@ if(xr(e,"index.xml"))throw new Error("Unsupported NUMBERS 09 file");throw new Er
     drawSavings(months);
     drawExpenses(months);
     drawAllocation(months, false);
+  }
+
+  /* Conto per conto, quanto fa il patrimonio di questo mese. Esiste per una
+     ragione precisa: quando il totale non torna con il proprio foglio, la
+     domanda è sempre "quale conto sta sballando?" — e senza questa scheda
+     l'unico modo per rispondere era aprire Impostazioni e sommare a mano.
+     Le pensioni sono elencate SOTTO il totale liquido, mai dentro. */
+  function netWorthBreakdownCard() {
+    const ym = lastMonthWith(currentMonth());
+    const rows = [];
+    let liquidSum = 0, lockedSum = 0;
+    (data.accounts || []).forEach(a => {
+      const s = E.getSnapshot(data, a.id, ym);
+      if (!s || s.balancePayday == null) return;
+      const liquid = E.isLiquid(a);
+      if (liquid) liquidSum += s.balancePayday; else lockedSum += s.balancePayday;
+      rows.push({ a, bal: s.balancePayday, liquid });
+    });
+
+    // Stesso conto bancario inserito due volte = patrimonio gonfiato. È il
+    // modo più facile di sbagliarsi (import ripetuto, conto ricreato dal
+    // wizard), quindi va detto qui, dove si guarda il totale.
+    const byName = {};
+    rows.forEach(r => { const k = r.a.name.trim().toLowerCase(); (byName[k] = byName[k] || []).push(r); });
+    const dupes = Object.values(byName).filter(g => g.length > 1);
+
+    const body = el('div');
+    let html = `<div class="kpi"><span>Patrimonio liquido — ${E.monthLabelIT(ym)}</span><b style="font-size:22px">${fmt(E.r2(liquidSum))}</b></div>
+      <table class="data-table" style="width:100%;margin-top:8px"><tbody>`;
+    rows.filter(r => r.liquid).forEach(r => {
+      html += `<tr><td>${escapeHtml(r.a.name)} <span class="badge">${r.a.type}</span></td><td style="text-align:right">${fmt(r.bal)}</td></tr>`;
+    });
+    html += `<tr style="font-weight:700;border-top:2px solid var(--line)"><td>Totale liquido</td><td style="text-align:right">${fmt(E.r2(liquidSum))}</td></tr>`;
+    html += '</tbody></table>';
+    if (lockedSum > 0) {
+      html += `<p class="muted small" style="margin:10px 0 0">Pensioni (<b>${fmt(E.r2(lockedSum))}</b>) — <b>escluse</b> dal totale qui sopra e da tutti i calcoli FIRE prima dei ${data.settings.fire.pensionStartAge} anni. Compaiono solo nella linea tratteggiata "Totale (incl. pensioni)" del grafico e nella tab Pensioni.</p>`;
+    }
+    if (dupes.length) {
+      html += `<p class="small" style="color:var(--neg);margin:10px 0 0">⚠ <b>Conti duplicati</b>: ${dupes.map(g => escapeHtml(g[0].a.name) + ' (×' + g.length + ')').join(', ')}. Lo stesso conto è contato più volte, quindi il patrimonio qui sopra è gonfiato. Vai in <b>Impostazioni → Conti</b> ed elimina la copia di troppo.</p>`;
+    }
+    body.innerHTML = html;
+    return card('Composizione del patrimonio', body,
+      'Il dettaglio conto per conto del mese più recente. Il <b>totale liquido</b> è la cifra da confrontare con il tuo foglio: somma corrente, depositi e broker, e <b>non</b> include le pensioni. Se il numero non torna, quasi sempre è un conto duplicato o un conto che non dovrebbe esserci (es. un conto comune/bridge): li vedi elencati qui.');
   }
 
   function milestoneAnnotations(months) {
@@ -3315,6 +3359,16 @@ if(xr(e,"index.xml"))throw new Error("Unsupported NUMBERS 09 file");throw new Er
             const suggested = acc && acc.role === 'main' ? 'ABN AMRO' : acc && acc.role === 'savings' ? 'ABN Savings' : 'Nuovo conto';
             const name = prompt('Nome del nuovo conto:', suggested);
             if (!name) { renderPreview(container, main); return; } // cancelled: leave mapping unchanged, redraw resets the <select>
+            // Un conto con lo stesso nome esiste già: crearne un secondo
+            // significherebbe contare due volte lo stesso conto bancario nel
+            // patrimonio. Riusiamo quello esistente invece di duplicarlo.
+            const existing = data.accounts.find(x => x.name.trim().toLowerCase() === name.trim().toLowerCase());
+            if (existing) {
+              alert('Esiste già un conto chiamato "' + existing.name + '": collego l\'estratto a quello invece di crearne un secondo (altrimenti il patrimonio verrebbe contato due volte).');
+              roles2[sel.dataset.acc] = { kind: 'own', accountId: existing.id };
+              save(); recomputeAbnDigest(); render();
+              return;
+            }
             const type = acc && acc.role === 'savings' ? 'savings' : 'current';
             // createdAt = inizio periodo dell'export, non oggi — altrimenti le
             // righe di mesi passati verrebbero escluse da accountsActiveAt().
@@ -3323,6 +3377,18 @@ if(xr(e,"index.xml"))throw new Error("Unsupported NUMBERS 09 file");throw new Er
             roles2[sel.dataset.acc] = { kind: 'own', accountId: newAcc.id };
             save(); recomputeAbnDigest(); render(); // full re-render: the IBAN-config card's account picker must see the new account too
             return;
+          }
+          if (v.startsWith('own:')) {
+            // Due conti dell'estratto sullo stesso conto della dashboard: i
+            // saldi del secondo sovrascriverebbero quelli del primo.
+            const taken = Object.entries(roles2).find(([accNum, r2v]) =>
+              accNum !== sel.dataset.acc && r2v && r2v.kind === 'own' && r2v.accountId === v.slice(4));
+            if (taken) {
+              const other = E.accountById(data, v.slice(4));
+              alert('Il conto "' + (other ? other.name : '?') + '" è già collegato al conto ' + taken[0] + ' di questo estratto. Ogni conto della dashboard può essere collegato a un solo conto dell\'estratto, altrimenti i saldi si sovrascrivono.');
+              renderPreview(container, main);
+              return;
+            }
           }
           roles2[sel.dataset.acc] = v === 'ignore' ? { kind: 'ignore' }
             : v === 'cj' ? { kind: 'cj' }
