@@ -61,7 +61,7 @@ function run() {
     if (!months.includes('2026-03')) throw new Error('demo month 2026-03 missing');
   });
 
-  const tabs = ['andamento', 'storico', 'fire', 'simulatore', 'tasse', 'pensioni', 'impostazioni'];
+  const tabs = ['andamento', 'storico', 'fire', 'importa', 'simulatore', 'tasse', 'pensioni', 'impostazioni'];
   tabs.forEach(tab => {
     t('render tab: ' + tab, () => {
       window.FD.go(tab);
@@ -93,6 +93,46 @@ function run() {
     const modal = document.querySelector('.chart-modal');
     if (!modal) throw new Error('chart modal did not open');
     modal.parentElement.remove();
+  });
+
+  t('importa tab renders IBAN config, upload zones, and insights', () => {
+    window.FD.go('importa');
+    const content = document.querySelector('.content');
+    if (!content) throw new Error('no content');
+    if (!/Configurazione IBAN/.test(content.textContent)) throw new Error('IBAN config section missing');
+    if (!/Carica estratti/.test(content.textContent)) throw new Error('upload section missing');
+    if (!document.querySelector('#imp-abn-zone')) throw new Error('ABN upload zone missing');
+    if (!document.querySelector('#imp-scal-zone')) throw new Error('Scalable upload zone missing');
+    // insights should render since we have demo data
+    if (!/Riepilogo finanziario/.test(content.textContent)) throw new Error('insights summary card missing');
+  });
+
+  t('importa: IBAN add/remove works', () => {
+    window.FD.go('importa');
+    const ibanInput = document.querySelector('#imp-new-iban');
+    const accSelect = document.querySelector('#imp-new-iban-acc');
+    const addBtn = document.querySelector('#imp-add-iban');
+    if (!ibanInput || !addBtn) throw new Error('IBAN input form missing');
+    ibanInput.value = 'NL12TEST0000000001';
+    addBtn.click();
+    const cfg = window.FD.data.settings.importConfig;
+    if (!cfg.ownIbans['NL12TEST0000000001']) throw new Error('IBAN not saved');
+    // cleanup
+    delete cfg.ownIbans['NL12TEST0000000001'];
+  });
+
+  t('importa: shared expense IBAN config persists', () => {
+    window.FD.go('importa');
+    const inp = document.querySelector('#imp-new-shared');
+    const label = document.querySelector('#imp-new-shared-label');
+    const btn = document.querySelector('#imp-add-shared');
+    if (!inp || !btn) throw new Error('shared IBAN form missing');
+    inp.value = 'NL43TEST0000000002';
+    label.value = 'Giulia';
+    btn.click();
+    const cfg = window.FD.data.settings.importConfig;
+    if (cfg.sharedExpenseIbans['NL43TEST0000000002'] !== 'Giulia') throw new Error('shared IBAN not saved');
+    delete cfg.sharedExpenseIbans['NL43TEST0000000002'];
   });
 
   t('storico table has rows', () => {
