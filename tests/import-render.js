@@ -26,9 +26,32 @@ setTimeout(() => {
   console.log('\n=== Import render (real 2025–2026 data) ===');
   t('loaded 7 accounts', () => { if (w.FD.data.accounts.length !== 7) throw new Error('got ' + w.FD.data.accounts.length); });
   ['andamento', 'storico', 'fire', 'pensioni', 'impostazioni'].forEach(tab => t('render ' + tab, () => { w.FD.go(tab); if (!d.querySelector('.content')) throw new Error('no content'); }));
-  t('storico shows 17 rows', () => { w.FD.go('storico'); if (d.querySelectorAll('.data-row').length !== 17) throw new Error('rows=' + d.querySelectorAll('.data-row').length); });
+  // Row count is derived, not hardcoded: the dataset grows every time a new
+  // month is added to generate-data.js, and a stale literal here would fail
+  // for a reason that has nothing to do with rendering.
+  t('storico shows one row per month in the dataset', () => {
+    const E = require(path.join(ROOT, 'engine.js'));
+    const expected = E.monthSeries(w.FD.data).length;
+    w.FD.go('storico');
+    const got = d.querySelectorAll('.data-row').length;
+    if (got !== expected) throw new Error('rows=' + got + ', months=' + expected);
+  });
   t('pensioni renders Generali', () => { w.FD.go('pensioni'); if (!/Generali/.test(d.body.textContent)) throw new Error('no Generali'); });
   t('FIRE capital is 186.426 (brokers only, archived excluded)', () => { const E = require(path.join(ROOT, 'engine.js')); if (Math.round(E.fireCapital(w.FD.data, '2026-05')) !== 186426) throw new Error('got ' + E.fireCapital(w.FD.data, '2026-05')); });
+  // The numbers the user actually reads off the dashboard must equal the
+  // source spreadsheet's "tot" column, month by month — this is the guard
+  // that the import reproduces the sheet rather than merely rendering.
+  t('liquid net worth matches the spreadsheet for every month', () => {
+    const E = require(path.join(ROOT, 'engine.js'));
+    const expected = {
+      '2025-12': 181809, '2026-01': 191254, '2026-02': 206937, '2026-03': 202524,
+      '2026-04': 214953, '2026-05': 223685, '2026-06': 234911, '2026-07': 235394,
+    };
+    Object.keys(expected).forEach(ym => {
+      const got = Math.round(E.liquidNetWorth(w.FD.data, ym));
+      if (got !== expected[ym]) throw new Error(ym + ': got ' + got + ', sheet says ' + expected[ym]);
+    });
+  });
   t('no console errors', () => { if (errors.length) throw new Error(errors.join('\n      ')); });
   console.log(fail ? '\nFAILED' : '\nALL PASSED');
   process.exit(fail ? 1 : 0);
