@@ -492,9 +492,69 @@
       "balancePayday": 20063,
       "balancePaydayMinus1": null
     },
+    "acc-1|2026-06": {
+      "accountId": "acc-1",
+      "yearMonth": "2026-06",
+      "balancePayday": 12275,
+      "balancePaydayMinus1": 3021
+    },
+    "acc-4|2026-06": {
+      "accountId": "acc-4",
+      "yearMonth": "2026-06",
+      "balancePayday": 193530,
+      "balancePaydayMinus1": null
+    },
+    "acc-2|2026-06": {
+      "accountId": "acc-2",
+      "yearMonth": "2026-06",
+      "balancePayday": 9000,
+      "balancePaydayMinus1": null
+    },
+    "acc-5|2026-06": {
+      "accountId": "acc-5",
+      "yearMonth": "2026-06",
+      "balancePayday": 20106,
+      "balancePaydayMinus1": null
+    },
+    "acc-1|2026-07": {
+      "accountId": "acc-1",
+      "yearMonth": "2026-07",
+      "balancePayday": 8023,
+      "balancePaydayMinus1": 2898
+    },
+    "acc-4|2026-07": {
+      "accountId": "acc-4",
+      "yearMonth": "2026-07",
+      "balancePayday": 198194,
+      "balancePaydayMinus1": null
+    },
+    "acc-2|2026-07": {
+      "accountId": "acc-2",
+      "yearMonth": "2026-07",
+      "balancePayday": 9030,
+      "balancePaydayMinus1": null
+    },
+    "acc-5|2026-07": {
+      "accountId": "acc-5",
+      "yearMonth": "2026-07",
+      "balancePayday": 20147,
+      "balancePaydayMinus1": null
+    },
     "acc-7|2026-05": {
       "accountId": "acc-7",
       "yearMonth": "2026-05",
+      "balancePayday": 10000,
+      "balancePaydayMinus1": null
+    },
+    "acc-7|2026-06": {
+      "accountId": "acc-7",
+      "yearMonth": "2026-06",
+      "balancePayday": 10000,
+      "balancePaydayMinus1": null
+    },
+    "acc-7|2026-07": {
+      "accountId": "acc-7",
+      "yearMonth": "2026-07",
       "balancePayday": 10000,
       "balancePaydayMinus1": null
     }
@@ -674,7 +734,7 @@
       ],
       "internalTransfers": [
         {
-          "id": "t-33",
+          "id": "t-37",
           "fromAccountId": "acc-6",
           "toAccountId": "acc-4",
           "amount": 22192,
@@ -765,7 +825,7 @@
       ],
       "internalTransfers": [
         {
-          "id": "t-34",
+          "id": "t-38",
           "fromAccountId": "acc-1",
           "toAccountId": "acc-2",
           "amount": 30847,
@@ -798,7 +858,7 @@
       ],
       "internalTransfers": [
         {
-          "id": "t-35",
+          "id": "t-39",
           "fromAccountId": "acc-3",
           "toAccountId": "acc-1",
           "amount": 14152,
@@ -831,7 +891,7 @@
       ],
       "internalTransfers": [
         {
-          "id": "t-36",
+          "id": "t-40",
           "fromAccountId": "acc-2",
           "toAccountId": "acc-5",
           "amount": 20000,
@@ -864,14 +924,14 @@
       ],
       "internalTransfers": [
         {
-          "id": "t-37",
+          "id": "t-41",
           "fromAccountId": "acc-6",
           "toAccountId": "acc-1",
           "amount": 1600,
           "note": "chiusura Trade Republic"
         },
         {
-          "id": "t-38",
+          "id": "t-42",
           "fromAccountId": "acc-2",
           "toAccountId": "acc-1",
           "amount": 4202,
@@ -898,6 +958,56 @@
           "id": "c-32",
           "accountId": "acc-4",
           "amount": 1476,
+          "kind": "one_off",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2026-06": {
+      "yearMonth": "2026-06",
+      "salaryNet": 9254,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-33",
+          "accountId": "acc-4",
+          "amount": 1187,
+          "kind": "recurring",
+          "source": "current"
+        },
+        {
+          "id": "c-34",
+          "accountId": "acc-4",
+          "amount": 1750,
+          "kind": "one_off",
+          "source": "current"
+        }
+      ],
+      "internalTransfers": [],
+      "flags": []
+    },
+    "2026-07": {
+      "yearMonth": "2026-07",
+      "salaryNet": 5125,
+      "extraSalary": 0,
+      "otherIncome": 0,
+      "paydayDayOfMonth": 25,
+      "contributions": [
+        {
+          "id": "c-35",
+          "accountId": "acc-4",
+          "amount": 1187,
+          "kind": "recurring",
+          "source": "current"
+        },
+        {
+          "id": "c-36",
+          "accountId": "acc-4",
+          "amount": 4500,
           "kind": "one_off",
           "source": "current"
         }
@@ -931,13 +1041,13 @@
     },
     "milestones": [
       {
-        "id": "ms-39",
+        "id": "ms-43",
         "date": "2027-05",
         "label": "Scadenza 30% ruling + Box 3",
         "note": null
       },
       {
-        "id": "ms-40",
+        "id": "ms-44",
         "date": "2030-12",
         "label": "iBonds Dec 2030 maturity — riallocare",
         "note": null

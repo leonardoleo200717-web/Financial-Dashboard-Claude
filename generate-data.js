@@ -73,6 +73,8 @@ const Y26 = [
   [2619, 7722, 5103, 0, 160000, 20000, 1600, 13202, 202524, 1383, 13000],
   [3171, 8300, 5129, 0, 177631, 20022, 0, 9000, 214953, 884, 8000],
   [3100, 8196, 5096, 0, 186426, 20063, 0, 9000, 223685, 1186, 1476],
+  [3021, 12275, 9254, 0, 193530, 20106, 0, 9000, 234911, 1187, 1750],  // vakantiegeld
+  [2898, 8023, 5125, 0, 198194, 20147, 0, 9030, 235394, 1187, 4500],   // savings +30,54 interessi
 ];
 Y26.forEach((r, i) => {
   const ym = '2026-' + M[i];
@@ -90,7 +92,11 @@ Y26.forEach((r, i) => {
   if (scOne != null) contribs.push(C(SCAL, scOne, 'current', 'one_off'));
   entry(ym, income, contribs);
 });
+// Generali: nessun estratto mensile — il valore noto (10.000 a fine 2026) viene
+// riportato sull'ultimo mese così la pensione resta nel patrimonio totale.
 snap(GENER, '2026-05', 10000);
+snap(GENER, '2026-06', 10000);
+snap(GENER, '2026-07', 10000);
 
 /* ----------------- reconstructed internal transfers ------------------ */
 /* These moves were not in the sheet but are evident from the balances /
