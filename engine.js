@@ -537,24 +537,49 @@
     return m ? m[1] : null;
   }
 
+  // Shared row-object mapping for a single ABN row given as a cell array
+  // (columns: accountNumber, mutationcode, transactiondate, valuedate,
+  // startsaldo, endsaldo, amount, description). Cells may be strings (text
+  // export, possibly "20260102.0") or numbers (binary XLS read via SheetJS,
+  // e.g. 20260102) — both ymdToIso/parseAmount accept either. Returns null
+  // for header/blank/malformed rows.
+  function abnRowFromCells(cells) {
+    if (!cells || cells.length < 8) return null;
+    if (/accountNumber/i.test(String(cells[0]))) return null; // header
+    const date = ymdToIso(cells[2]);
+    if (!date) return null;
+    return {
+      account: String(cells[0]).replace(/\.0$/, '').trim(),
+      date, ym: date.slice(0, 7),
+      start: parseAmount(cells[4]), end: parseAmount(cells[5]),
+      amount: parseAmount(cells[6]),
+      description: String(cells[7] == null ? '' : cells[7]).trim(),
+      counterIban: extractIban(cells[7]),
+    };
+  }
+
   // → [{account, date:"YYYY-MM-DD", ym, start, end, amount, description, counterIban}]
+  // Text export (TSV/CSV, as downloaded or converted from Excel "save as text").
   function parseABNStatement(text) {
     const rows = [];
     String(text || '').split(/\r?\n/).forEach(line => {
       if (!line.trim()) return;
       const cells = line.split('\t').length >= 8 ? line.split('\t') : line.split(';');
-      if (cells.length < 8) return;
-      if (/accountNumber/i.test(cells[0])) return; // header
-      const date = ymdToIso(cells[2]);
-      if (!date) return;
-      rows.push({
-        account: String(cells[0]).replace(/\.0$/, '').trim(),
-        date, ym: date.slice(0, 7),
-        start: parseAmount(cells[4]), end: parseAmount(cells[5]),
-        amount: parseAmount(cells[6]),
-        description: String(cells[7] || '').trim(),
-        counterIban: extractIban(cells[7]),
-      });
+      const row = abnRowFromCells(cells);
+      if (row) rows.push(row);
+    });
+    rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    return rows;
+  }
+
+  // Same output, from an array-of-arrays (one row per statement line, cells
+  // already split — e.g. XLSX.utils.sheet_to_json(sheet, {header:1, raw:true})
+  // when reading a genuine binary .xls export in the browser via SheetJS).
+  function parseABNRows(rowsArray) {
+    const rows = [];
+    (rowsArray || []).forEach(cells => {
+      const row = abnRowFromCells(cells);
+      if (row) rows.push(row);
     });
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
     return rows;
@@ -1303,7 +1328,7 @@
     // FIRE simulator (asset-class, real €)
     fireClassTotals, simulateFireDeterministic, coastFireAge, monteCarloFire,
     // statement import + pension estimate + lijfrente planner
-    parseAmount, ymdToIso, extractIban, extractCounterparty, parseABNStatement, parseScalableCSV,
+    parseAmount, ymdToIso, extractIban, extractCounterparty, parseABNStatement, parseABNRows, parseScalableCSV,
     abnAccountsInStatement, abnValidateContinuity,
     abnMonthlyDigest, scalableMonthlyDigest, applyAbnDigest, categorizeTransaction,
     estimatedPensionBalance, lijfrentePlan,

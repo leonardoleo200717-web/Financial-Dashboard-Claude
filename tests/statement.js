@@ -239,7 +239,59 @@ t('balancesOnly writes snapshots but never touches entries', () => {
   eq(Object.keys(data.entries).length, 0, 'no entries created');
 });
 
+console.log('\n=== parseABNRows: binary .xls end-to-end (SheetJS, synthetic fixture) ===');
+// A real ABN export downloads as a genuine binary .xls (BIFF8/CFB), which the
+// text-based parseABNStatement cannot read at all (FileReader.readAsText on a
+// binary file yields garbage → 0 rows). The browser build vendors SheetJS
+// (vendor/xlsx.core.min.js) to read it directly; parseABNRows consumes the
+// array-of-arrays SheetJS produces. This test builds a real binary .xls
+// in-memory with the same library (round-trip, not real bank data) and reads
+// it back through the EXACT vendored build to prove the shipped bundle works.
+let XLSX_TEST_SKIPPED = false;
+try {
+  const XLSXW = require('xlsx');           // full build, for writing the fixture only
+  const XLSXR = require(path.join(__dirname, '..', 'vendor', 'xlsx.core.min.js')); // what actually ships
+
+  const aoa = [
+    ['accountNumber', 'mutationcode', 'transactiondate', 'valuedate', 'startsaldo', 'endsaldo', 'amount', 'description'],
+    [111, 'EUR', 20260120, 20260120, 5000, 4900, -100, 'BEA, Google Pay                  Albert Heijn 1041,PAS472'],
+    [111, 'EUR', 20260125, 20260125, 4900, 9400, 4500, 'SEPA Overboeking IBAN: NL26CITI0000000001 Naam: ASML Netherlands B.V.'],
+  ];
+  const ws = XLSXW.utils.aoa_to_sheet(aoa);
+  const wb = XLSXW.utils.book_new();
+  XLSXW.utils.book_append_sheet(wb, ws, 'Sheet0');
+  const xlsBuffer = XLSXW.write(wb, { type: 'buffer', bookType: 'biff8' });
+
+  t('synthetic fixture is a genuine binary .xls (OLE2/CFB magic)', () => {
+    const magic = xlsBuffer.slice(0, 4).toString('hex');
+    eq(magic, 'd0cf11e0', 'CFB magic bytes');
+  });
+
+  t('the VENDORED build (xlsx.core.min.js, what ships to the browser) reads it', () => {
+    const wbRead = XLSXR.read(xlsBuffer, { type: 'buffer', raw: true });
+    const sheet = wbRead.Sheets[wbRead.SheetNames[0]];
+    const rowsArray = XLSXR.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    const parsed = E.parseABNRows(rowsArray);
+    eq(parsed.length, 2);
+    close(parsed[0].amount, -100);
+    close(parsed[1].amount, 4500);
+    eq(parsed[0].account, '111');
+    eq(parsed[0].date, '2026-01-20');
+  });
+
+  t('reading .txt through the same fixture bytes fails gracefully (proves text path alone cannot read it)', () => {
+    // Simulates what happened before the fix: FileReader.readAsText on a
+    // binary .xls yields mojibake, parseABNStatement finds 0 valid rows.
+    const asLatin1Text = xlsBuffer.toString('latin1');
+    const rows = E.parseABNStatement(asLatin1Text);
+    eq(rows.length, 0, 'binary bytes read as text must not silently produce rows');
+  });
+} catch (e) {
+  XLSX_TEST_SKIPPED = true;
+  console.log('  \x1b[33m⚠ skipped (xlsx package or vendor/xlsx.core.min.js not available): ' + e.message + '\x1b[0m');
+}
+
 console.log('\n' + '='.repeat(48));
-console.log(`  ${pass} passed, ${fail} failed`);
+console.log(`  ${pass} passed, ${fail} failed${XLSX_TEST_SKIPPED ? ' (binary-xls tests skipped)' : ''}`);
 console.log('='.repeat(48) + '\n');
 process.exit(fail ? 1 : 0);

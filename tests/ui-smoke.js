@@ -42,18 +42,20 @@ const dom = new JSDOM(html, {
 const { window } = dom;
 const { document } = window;
 
-function run() {
+async function run() {
   let pass = 0, fail = 0;
-  function t(name, fn) {
-    try { fn(); pass++; console.log('  \x1b[32m✓\x1b[0m ' + name); }
+  // fn may be sync or async; either way t() itself is awaited by every call
+  // site below (async no-ops for sync fn — behavior is unchanged for them).
+  async function t(name, fn) {
+    try { await fn(); pass++; console.log('  \x1b[32m✓\x1b[0m ' + name); }
     catch (e) { fail++; console.log('  \x1b[31m✗ ' + name + '\x1b[0m\n      ' + (e.stack || e.message)); }
   }
 
   console.log('\n=== UI smoke (jsdom) ===');
-  t('app booted and exposed window.FD', () => {
+  await t('app booted and exposed window.FD', () => {
     if (!window.FD) throw new Error('window.FD missing — app did not boot');
   });
-  t('seedDemo builds the transfer-chain dataset', () => {
+  await t('seedDemo builds the transfer-chain dataset', () => {
     window.FD.seedDemo();
     const d = window.FD.data;
     if (!d.accounts.length) throw new Error('no accounts seeded');
@@ -62,19 +64,19 @@ function run() {
   });
 
   const tabs = ['andamento', 'storico', 'fire', 'importa', 'simulatore', 'tasse', 'pensioni', 'impostazioni'];
-  tabs.forEach(tab => {
-    t('render tab: ' + tab, () => {
+  for (const tab of tabs) {
+    await t('render tab: ' + tab, () => {
       window.FD.go(tab);
       if (!document.querySelector('.content')) throw new Error('no .content rendered');
     });
-  });
+  }
 
-  t('charts were instantiated on Andamento', () => {
+  await t('charts were instantiated on Andamento', () => {
     window.FD.go('andamento');
     if (!window.__charts) throw new Error('no charts created');
   });
 
-  t('info ⓘ button toggles an explanation panel', () => {
+  await t('info ⓘ button toggles an explanation panel', () => {
     window.FD.go('andamento');
     const info = document.querySelector('.info-btn');
     if (!info) throw new Error('no info button');
@@ -85,7 +87,7 @@ function run() {
     if (pop.style.display === before) throw new Error('info pop did not toggle');
   });
 
-  t('enlarge ⤢ button opens a chart modal', () => {
+  await t('enlarge ⤢ button opens a chart modal', () => {
     window.FD.go('andamento');
     const exp = document.querySelector('.enlarge-btn');
     if (!exp) throw new Error('no enlarge button');
@@ -95,7 +97,7 @@ function run() {
     modal.parentElement.remove();
   });
 
-  t('importa tab renders IBAN config, upload zones, and insights', () => {
+  await t('importa tab renders IBAN config, upload zones, and insights', () => {
     window.FD.go('importa');
     const content = document.querySelector('.content');
     if (!content) throw new Error('no content');
@@ -107,7 +109,7 @@ function run() {
     if (!/Riepilogo finanziario/.test(content.textContent)) throw new Error('insights summary card missing');
   });
 
-  t('importa: IBAN add/remove works', () => {
+  await t('importa: IBAN add/remove works', () => {
     window.FD.go('importa');
     const ibanInput = document.querySelector('#imp-new-iban');
     const accSelect = document.querySelector('#imp-new-iban-acc');
@@ -121,7 +123,7 @@ function run() {
     delete cfg.ownIbans['NL12TEST0000000001'];
   });
 
-  t('importa: shared expense IBAN config persists', () => {
+  await t('importa: shared expense IBAN config persists', () => {
     window.FD.go('importa');
     const inp = document.querySelector('#imp-new-shared');
     const label = document.querySelector('#imp-new-shared-label');
@@ -135,13 +137,61 @@ function run() {
     delete cfg.sharedExpenseIbans['NL43TEST0000000002'];
   });
 
-  t('storico table has rows', () => {
+  await t('vendored SheetJS (window.XLSX) initialized correctly in the browser DOM', () => {
+    if (typeof window.XLSX === 'undefined') throw new Error('window.XLSX not defined — vendor-xlsx script failed to execute');
+    if (typeof window.XLSX.read !== 'function') throw new Error('XLSX.read missing');
+    if (typeof window.XLSX.utils.sheet_to_json !== 'function') throw new Error('XLSX.utils.sheet_to_json missing');
+  });
+
+  await t('importa: uploading a genuine binary .xls parses via SheetJS (real file-input flow)', async () => {
+    window.FD.go('importa');
+    // Build a REAL binary .xls (BIFF8/CFB) — the exact format ABN's own
+    // export button produces, and the exact bug that shipped: the old code
+    // read every upload with FileReader.readAsText(), which turns binary
+    // bytes into mojibake and made parseABNStatement find 0 rows. Written
+    // with the full 'xlsx' package (Node-side, not the vendored browser
+    // build) so this is a true byte-for-byte binary file, not text in
+    // disguise.
+    const XLSXW = require('xlsx');
+    const aoa = [
+      ['accountNumber', 'mutationcode', 'transactiondate', 'valuedate', 'startsaldo', 'endsaldo', 'amount', 'description'],
+      [999, 'EUR', 20260201, 20260201, 1000, 900, -100, 'BEA, Google Pay Test Shop'],
+      [999, 'EUR', 20260202, 20260202, 900, 5400, 4500, 'SEPA Overboeking IBAN: NL26CITI0000000001 Naam: ASML Netherlands B.V.'],
+    ];
+    const wsx = XLSXW.utils.aoa_to_sheet(aoa);
+    const wbx = XLSXW.utils.book_new();
+    XLSXW.utils.book_append_sheet(wbx, wsx, 'Sheet0');
+    const xlsBuffer = XLSXW.write(wbx, { type: 'buffer', bookType: 'biff8' });
+    if (xlsBuffer.slice(0, 4).toString('hex') !== 'd0cf11e0') throw new Error('fixture is not a real binary .xls');
+
+    const file = new window.File([new Uint8Array(xlsBuffer)], 'estratto.xls', { type: 'application/vnd.ms-excel' });
+    const input = document.querySelector('#imp-abn-file');
+    if (!input) throw new Error('ABN file input not found');
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    const changeEvent = new window.Event('change', { bubbles: true });
+    input.dispatchEvent(changeEvent);
+    // onchange is async (await inside parseAbnFile, itself awaiting a real
+    // FileReader) — poll instead of a fixed wait: jsdom's FileReader timing
+    // can trail behind a long-running suite by more than a token delay.
+    let status = null;
+    for (let i = 0; i < 20; i++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      status = document.querySelector('#imp-abn-status');
+      if (status && status.textContent) break;
+    }
+    if (!status || !/transazioni/.test(status.textContent)) {
+      throw new Error('import did not complete: ' + (status ? status.textContent : 'no status element'));
+    }
+    if (/✗/.test(status.textContent)) throw new Error('import reported an error: ' + status.textContent);
+  });
+
+  await t('storico table has rows', () => {
     window.FD.go('storico');
     const rows = document.querySelectorAll('.data-row');
     if (!rows.length) throw new Error('no data rows');
   });
 
-  t('FIRE tab shows headline progress + personal-return card', () => {
+  await t('FIRE tab shows headline progress + personal-return card', () => {
     window.FD.go('fire');
     const txt = document.body.textContent;
     if (!/A che punto sei/.test(txt)) throw new Error('headline missing');
@@ -149,7 +199,7 @@ function run() {
     if (!/Rendimento personale/.test(txt)) throw new Error('personal return card missing');
   });
 
-  t('new-month entry form prefills balances and offers ghost contributions', () => {
+  await t('new-month entry form prefills balances and offers ghost contributions', () => {
     // open a fresh future month (2026-12) -> should carry forward balances
     const ov = document.querySelector('.modal-overlay'); if (ov) ov.remove();
     // 2026-04 is new; its predecessor 2026-03 has balances + a recurring contribution
@@ -163,7 +213,7 @@ function run() {
     document.querySelector('.modal-overlay').remove();
   });
 
-  t('entry form opens and shows transfer rows for 2026-03', () => {
+  await t('entry form opens and shows transfer rows for 2026-03', () => {
     window.FD.go('storico');
     // open editor for the chain month via the engine-backed form
     const overlayBefore = document.querySelector('.modal-overlay');
@@ -178,7 +228,7 @@ function run() {
     modal.parentElement.remove();
   });
 
-  t('interaction: SWR chip updates the FIRE number', () => {
+  await t('interaction: SWR chip updates the FIRE number', () => {
     window.FD.go('fire');
     const chip = document.querySelector('[data-swr="0.04"]');
     if (!chip) throw new Error('swr chip missing');
@@ -186,7 +236,7 @@ function run() {
     if (window.FD.data.settings.fire.swr !== 0.04) throw new Error('swr did not update');
   });
 
-  t('interaction: run Monte Carlo produces a probability', () => {
+  await t('interaction: run Monte Carlo produces a probability', () => {
     window.FD.go('fire');
     const btn = Array.from(document.querySelectorAll('button')).find(b => /Esegui simulazione/.test(b.textContent));
     if (!btn) throw new Error('monte carlo button missing');
@@ -194,7 +244,7 @@ function run() {
     if (!/Probabilità di successo/.test(document.body.textContent)) throw new Error('MC output missing');
   });
 
-  t('interaction: toggle FIRE checkbox on an account in Settings', () => {
+  await t('interaction: toggle FIRE checkbox on an account in Settings', () => {
     window.FD.go('impostazioni');
     const cb = document.querySelector('[data-fire]');
     if (!cb) throw new Error('no FIRE checkbox');
@@ -204,7 +254,7 @@ function run() {
     if (after === before) throw new Error('includeInFire did not change');
   });
 
-  t('interaction: edit + save a month persists balances', () => {
+  await t('interaction: edit + save a month persists balances', () => {
     const ov = document.querySelector('.modal-overlay'); if (ov) ov.remove();
     window.FD.openEntry('2026-02');
     const inp = document.querySelector('[data-snap-payday]');
@@ -217,7 +267,7 @@ function run() {
     if (!s || s.balancePayday !== 12345) throw new Error('balance not saved');
   });
 
-  t('simulator tab seeds fireSim and renders charts + numbers table', () => {
+  await t('simulator tab seeds fireSim and renders charts + numbers table', () => {
     window.FD.go('simulatore');
     const d = window.FD.data;
     if (!d.fireSim || !d.fireSim.classes || !d.fireSim.classes.length) throw new Error('fireSim not seeded');
@@ -226,7 +276,7 @@ function run() {
     if (!/non consulenza finanziaria/.test(document.body.textContent)) throw new Error('disclaimer missing');
   });
 
-  t('simulator what-if degrades gracefully when AI endpoint unreachable', async () => {
+  await t('simulator what-if degrades gracefully when AI endpoint unreachable', async () => {
     window.FD.go('simulatore');
     const ta = document.querySelector('.whatif-input');
     const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Simula');
@@ -237,7 +287,7 @@ function run() {
     if (!/AI non disponibile/.test(document.body.textContent)) throw new Error('no graceful AI-down message');
   });
 
-  t('simulator stress test renders with-vs-without and toggles a persisted shock', () => {
+  await t('simulator stress test renders with-vs-without and toggles a persisted shock', () => {
     window.FD.go('simulatore');
     if (!/Stress test/.test(document.body.textContent)) throw new Error('stress card missing');
     if (!document.querySelector('#sk-sev')) throw new Error('severity control missing');
@@ -249,7 +299,7 @@ function run() {
     if (window.FD.data.fireSim.profile.shock.enabled === before) throw new Error('shock not toggled/persisted');
   });
 
-  t('simulator manual param edit updates the engine result', () => {
+  await t('simulator manual param edit updates the engine result', () => {
     window.FD.go('simulatore');
     const inp = document.querySelector('[data-pf="annualSpend"]');
     if (!inp) throw new Error('no spend input');
@@ -257,7 +307,7 @@ function run() {
     if (window.FD.data.fireSim.profile.annualSpend !== 120000) throw new Error('param not saved');
   });
 
-  t('tax tab renders deterministic facts + disclaimer', () => {
+  await t('tax tab renders deterministic facts + disclaimer', () => {
     window.FD.go('tasse');
     const txt = document.body.textContent;
     if (!/Non è consulenza fiscale/.test(txt)) throw new Error('disclaimer missing');
@@ -265,7 +315,7 @@ function run() {
     if (!document.querySelector('.whatif-input')) throw new Error('chat input missing');
   });
 
-  t('tax ask degrades gracefully and renders all 3 agent layers', async () => {
+  await t('tax ask degrades gracefully and renders all 3 agent layers', async () => {
     window.FD.go('tasse');
     const ta = document.querySelector('.whatif-input');
     const btn = Array.from(document.querySelectorAll('button')).find(b => /Optimizer → Reviewer → Reconciler/.test(b.textContent));
@@ -279,7 +329,7 @@ function run() {
     if (!window.FD.data.taxAssist.history.length) throw new Error('history not persisted');
   });
 
-  t('AI settings card renders provider options and persists config', () => {
+  await t('AI settings card renders provider options and persists config', () => {
     window.FD.go('impostazioni');
     const sel = document.querySelector('#ai-prov');
     if (!sel) throw new Error('provider select missing');
@@ -290,7 +340,7 @@ function run() {
     if (!/deepseek/.test(ai.baseUrl)) throw new Error('preset baseUrl not applied');
   });
 
-  t('callModel routes to OpenAI-compatible shape for DeepSeek/Ollama', async () => {
+  await t('callModel routes to OpenAI-compatible shape for DeepSeek/Ollama', async () => {
     let captured = null;
     const realFetch = window.fetch;
     window.fetch = (url, opts) => { captured = { url, opts }; return Promise.resolve({ ok: true, json: () => Promise.resolve({ choices: [{ message: { content: 'OK-openai' } }] }) }); };
@@ -304,7 +354,7 @@ function run() {
     if (body.model !== 'deepseek-chat' || body.messages[0].role !== 'system') throw new Error('bad openai body');
   });
 
-  t('callModel routes to Anthropic shape with x-api-key when configured', async () => {
+  await t('callModel routes to Anthropic shape with x-api-key when configured', async () => {
     let captured = null;
     const realFetch = window.fetch;
     window.fetch = (url, opts) => { captured = { url, opts }; return Promise.resolve({ ok: true, json: () => Promise.resolve({ content: [{ text: 'OK-anthropic' }] }) }); };
@@ -318,20 +368,20 @@ function run() {
     window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
   });
 
-  t('storico shows bold annual rollup rows with YoY', () => {
+  await t('storico shows bold annual rollup rows with YoY', () => {
     window.FD.go('storico');
     const yearRows = document.querySelectorAll('.year-row');
     if (!yearRows.length) throw new Error('no annual rollup rows');
     if (!/^\d{4}$/.test(yearRows[0].querySelector('td b').textContent)) throw new Error('year label missing');
   });
 
-  t('coast FIRE card is pension-aware and has a crossover chart', () => {
+  await t('coast FIRE card is pension-aware and has a crossover chart', () => {
     window.FD.go('fire');
     if (!/Obiettivo \(due fasi, con pensioni\)/.test(document.body.textContent)) throw new Error('two-phase target missing from coast card');
     if (!document.querySelector('#c-coast')) throw new Error('coast crossover canvas missing');
   });
 
-  t('Monte Carlo params are editable in Settings', () => {
+  await t('Monte Carlo params are editable in Settings', () => {
     window.FD.go('impostazioni');
     const mean = document.querySelector('[data-param="meanReturn"][data-scope="mc"]');
     if (!mean) throw new Error('MC meanReturn input missing');
@@ -340,7 +390,7 @@ function run() {
     mean.value = '0.06'; mean.dispatchEvent(new window.Event('change'));
   });
 
-  t('archived account balance is NOT prefilled/written into a new month', () => {
+  await t('archived account balance is NOT prefilled/written into a new month', () => {
     // archive an account whose last snapshot is the month before the new one
     const d = window.FD.data;
     const acc = { id: 'arch-test', name: 'Archiviato', type: 'broker', liquidity: 'liquid', color: '#123456', createdAt: '2026-01', archivedAt: '2026-03' };
@@ -359,7 +409,7 @@ function run() {
     window.FD.save(); window.FD.render();
   });
 
-  t('account names are HTML-escaped (no XSS via account name)', () => {
+  await t('account names are HTML-escaped (no XSS via account name)', () => {
     const d = window.FD.data;
     const evil = { id: 'xss-test', name: '<img src=x onerror="window.__xss=1">', type: 'broker', liquidity: 'liquid', color: '#000000', createdAt: '2026-01', archivedAt: null };
     d.accounts.push(evil);
@@ -371,7 +421,7 @@ function run() {
     if (injected || flagged) throw new Error('account name executed as HTML');
   });
 
-  t('JSON export never contains the AI API key', () => {
+  await t('JSON export never contains the AI API key', () => {
     window.FD.data.settings.ai = { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-SECRET-123', model: 'deepseek-chat' };
     const payload = window.FD.exportPayload();
     const text = JSON.stringify(payload);
@@ -380,7 +430,7 @@ function run() {
     window.FD.data.settings.ai = { provider: 'artifact', baseUrl: '', apiKey: '', model: '' };
   });
 
-  t('no console.error / uncaught errors during smoke', () => {
+  await t('no console.error / uncaught errors during smoke', () => {
     if (errors.length) throw new Error(errors.join('\n      '));
   });
 
@@ -391,4 +441,4 @@ function run() {
 }
 
 // allow the app's DOMContentLoaded + setTimeout(0) chart callbacks to settle
-setTimeout(run, 200);
+setTimeout(() => { run().catch(e => { console.error(e); process.exit(1); }); }, 200);
