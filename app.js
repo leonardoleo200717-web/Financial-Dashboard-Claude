@@ -284,8 +284,13 @@
   }
   function makeChart(id, config) {
     if (charts[id]) { try { charts[id].destroy(); } catch (e) {} }
+    const canvas = $('#' + id);
+    // Deferred draws (setTimeout(…, 0), used so the canvas exists in the DOM
+    // before Chart.js measures it) can fire after the user has already
+    // switched tabs, when the canvas has been removed — bail out silently.
+    if (!canvas) { delete chartCfg[id]; return null; }
     chartCfg[id] = config;
-    charts[id] = new Chart($('#' + id), config);
+    charts[id] = new Chart(canvas, config);
     return charts[id];
   }
   function openChartModal(id) {
@@ -942,6 +947,8 @@
       });
     };
     setTimeout(() => {
+      // The card may have been replaced (tab switched) before this fires.
+      if (!$('#pj-start')) return;
       ['pj-start', 'pj-monthly'].forEach(id => $('#' + id).oninput = recompute);
       $('#pj-box3').onchange = recompute;
       recompute();
@@ -1022,6 +1029,8 @@
       } else $('#wi-oneoff-out').textContent = '';
     };
     setTimeout(() => {
+      // The card may have been replaced (tab switched) before this fires.
+      if (!$('#wi-c')) return;
       ['wi-c', 'wi-r', 'wi-e', 'wi-oneoff'].forEach(id => $('#' + id).oninput = recompute);
       recompute();
     }, 0);
@@ -1041,6 +1050,8 @@
 
     // total line + per fund
     setTimeout(() => {
+      // The tab may have been switched before this fires — bail if gone.
+      if (!$('#c-pension-total') || !$('#c-pension-contrib')) return;
       charts.pt = new Chart($('#c-pension-total'), {
         type: 'line',
         data: {
@@ -1422,6 +1433,54 @@
   /* ===================== TAB — Importa Estratti ====================== */
   let importState = null; // holds parsed data during the wizard
 
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error || new Error('Lettura file fallita'));
+      r.readAsText(file);
+    });
+  }
+  function readFileAsArrayBuffer(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error || new Error('Lettura file fallita'));
+      r.readAsArrayBuffer(file);
+    });
+  }
+  // A genuine ABN AMRO export can be either plain text (TSV/CSV, or an XLS
+  // "saved as text") or a real binary .xls (BIFF8/CFB — what ABN's own
+  // export button actually produces). Binary files parse via SheetJS
+  // (vendored, offline — window.XLSX); the row shape SheetJS returns
+  // (array-of-arrays via sheet_to_json({header:1})) feeds straight into
+  // E.parseABNRows, sharing all the same downstream logic as the text path.
+  async function parseAbnFile(file) {
+    const isBinaryExt = /\.xlsx?$/i.test(file.name || '');
+    if (isBinaryExt) {
+      if (typeof XLSX === 'undefined') throw new Error('Libreria XLSX non disponibile (offline senza cache?)');
+      const buf = await readFileAsArrayBuffer(file);
+      const wb = XLSX.read(buf, { type: 'array', raw: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rowsArray = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+      return E.parseABNRows(rowsArray);
+    }
+    // .txt/.tsv/.csv (or unrecognized extension): try as text first.
+    const text = await readFileAsText(file);
+    const rows = E.parseABNStatement(text);
+    if (rows.length) return rows;
+    // Mislabeled binary file (e.g. .txt extension on an actual .xls) — the
+    // OLE2/CFB magic header is "\xD0\xCF\x11\xE0"; retry via SheetJS.
+    if (/^\xD0\xCF\x11\xE0/.test(text) && typeof XLSX !== 'undefined') {
+      const buf = await readFileAsArrayBuffer(file);
+      const wb = XLSX.read(buf, { type: 'array', raw: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rowsArray = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+      return E.parseABNRows(rowsArray);
+    }
+    return rows;
+  }
+
   function renderImporta(main) {
     main.appendChild(el('h2', '', 'Importa estratti conto'));
     const imp = data.settings.importConfig || (data.settings.importConfig = { ownIbans: {}, sharedExpenseIbans: {}, salaryIban: '' });
@@ -1518,26 +1577,21 @@
       balanceDigests: {}, scalRows: null, abnDigest: null, scalDigest: null, edits: {},
     };
 
-    abnFileInput.onchange = function () {
+    abnFileInput.onchange = async function () {
       const file = this.files[0]; if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const text = reader.result;
-          importState.abnRows = E.parseABNStatement(text);
-          if (!importState.abnRows.length) throw new Error('Nessuna riga valida trovata (per gli XLS binari: esporta come TXT/TSV, oppure apri in Excel e salva come testo)');
-          // Un export ABN può contenere PIÙ conti (main + congiunto + savings):
-          // rilevali, proponi una mappatura, e calcola il digest solo sul main.
-          importState.abnAccounts = E.abnAccountsInStatement(importState.abnRows);
-          importState.continuity = E.abnValidateContinuity(importState.abnRows);
-          autoMapAbnRoles();
-          recomputeAbnDigest();
-          importState.edits = {};
-          uploadBody.querySelector('#imp-abn-status').innerHTML = `<span style="color:var(--pos)">✓ ${importState.abnRows.length} transazioni, ${importState.abnAccounts.length} conti rilevati</span>`;
-          renderPreview(uploadBody.querySelector('#imp-preview'), main);
-        } catch (e) { uploadBody.querySelector('#imp-abn-status').innerHTML = `<span style="color:var(--neg)">✗ ${escapeHtml(e.message)}</span>`; }
-      };
-      reader.readAsText(file);
+      try {
+        importState.abnRows = await parseAbnFile(file);
+        if (!importState.abnRows.length) throw new Error('Nessuna riga valida trovata nel file');
+        // Un export ABN può contenere PIÙ conti (main + congiunto + savings):
+        // rilevali, proponi una mappatura, e calcola il digest solo sul main.
+        importState.abnAccounts = E.abnAccountsInStatement(importState.abnRows);
+        importState.continuity = E.abnValidateContinuity(importState.abnRows);
+        autoMapAbnRoles();
+        recomputeAbnDigest();
+        importState.edits = {};
+        uploadBody.querySelector('#imp-abn-status').innerHTML = `<span style="color:var(--pos)">✓ ${importState.abnRows.length} transazioni, ${importState.abnAccounts.length} conti rilevati</span>`;
+        renderPreview(uploadBody.querySelector('#imp-preview'), main);
+      } catch (e) { uploadBody.querySelector('#imp-abn-status').innerHTML = `<span style="color:var(--neg)">✗ ${escapeHtml(e.message)}</span>`; }
     };
 
     scalFileInput.onchange = function () {

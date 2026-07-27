@@ -15,6 +15,7 @@
     "test:all": "node build.js && node tests/run.js && node tests/statement.js && node tests/property.js && node tests/ui-smoke.js && node tests/ui-fuzz.js && node tests/import-render.js && node tests/pwa.js"
   },
   "devDependencies": {
-    "jsdom": "^29.1.1"
+    "jsdom": "^29.1.1",
+    "xlsx": "^0.18.5"
   }
 }

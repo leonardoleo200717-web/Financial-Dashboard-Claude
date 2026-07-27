@@ -17,9 +17,18 @@ try {
   const chart = fs.readFileSync(path.join(dir, 'vendor', 'chart.umd.min.js'), 'utf8');
   vendorTag = '<script id="vendor-chart">' + chart + '\n</script>';
 } catch (e) { console.warn('vendor/chart.umd.min.js not found — using CDN tag'); }
+// Inline SheetJS (core build) so the browser can read a genuine binary ABN
+// AMRO .xls export (BIFF8/CFB) directly — no server-side conversion needed.
+let vendorXlsxTag = '<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.core.min.js"></script>';
+try {
+  const xlsx = fs.readFileSync(path.join(dir, 'vendor', 'xlsx.core.min.js'), 'utf8');
+  vendorXlsxTag = '<script id="vendor-xlsx">' + xlsx + '\n</script>';
+} catch (e) { console.warn('vendor/xlsx.core.min.js not found — using CDN tag'); }
 const out = shell
   .replace('<!--VENDOR_CHART-->', () => vendorTag)
+  .replace('<!--VENDOR_XLSX-->', () => vendorXlsxTag)
   .replace('/*<<ENGINE>>*/', () => engine)
   .replace('/*<<APP>>*/', () => app);
 fs.writeFileSync(path.join(dir, 'index.html'), out);
-console.log('Built index.html (' + out.length + ' bytes, Chart.js ' + (vendorTag.startsWith('<script id') ? 'inlined' : 'CDN') + ')');
+console.log('Built index.html (' + out.length + ' bytes, Chart.js ' + (vendorTag.startsWith('<script id') ? 'inlined' : 'CDN') +
+  ', SheetJS ' + (vendorXlsxTag.startsWith('<script id') ? 'inlined' : 'CDN') + ')');
